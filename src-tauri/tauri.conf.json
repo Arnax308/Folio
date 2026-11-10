@@ -1,0 +1,54 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Folio",
+  "version": "0.1.0",
+  "identifier": "app.folio.reader",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5199",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Folio",
+        "width": 1360,
+        "height": 880,
+        "minWidth": 880,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "shortDescription": "A calm reader for PDF and Markdown",
+    "longDescription": "Folio reads PDF and Markdown, with highlights, notes, Mermaid diagrams and a Markdown editor.",
+    "copyright": "",
+    "category": "Productivity",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      { "ext": ["pdf"], "name": "PDF Document", "role": "Viewer" },
+      { "ext": ["md", "markdown"], "name": "Markdown Document", "role": "Editor" }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}
