@@ -160,6 +160,27 @@ export function Slider({
   );
 }
 
+export function Switch({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="switch-row">
+      <span className="switch-text">
+        <span>{label}</span>
+        {hint && <span className="switch-hint">{hint}</span>}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        className={'switch' + (checked ? ' on' : '')}
+        onClick={() => onChange(!checked)}
+      >
+        <span className="switch-knob" />
+      </button>
+    </label>
+  );
+}
+
 export function timeAgo(t: number) {
   const s = (Date.now() - t) / 1000;
   if (s < 60) return 'just now';

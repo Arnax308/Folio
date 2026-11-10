@@ -24,6 +24,7 @@ In the desktop app, files you open from Explorer are added to the library (re-op
 - Continuous scroll, lazy page rendering, crisp HiDPI canvases
 - Zoom: fit width (`0`), fit page (`9`), `+` / `−`, `Ctrl`+scroll
 - Rotate the whole document (`R` / `Shift R`) or single pages from their thumbnail
+- Two-page book view (`D`) with a 3D page-turn animation — turn with `←` / `→`, Space, the scroll wheel or the side arrows. The animation and "cover on its own" can be switched off in the **Aa** menu
 - Sidebar (`T`): thumbnails, outline, full-text search (`Ctrl F`) with in-page match highlighting
 - Highlights in 5 colours from a floating toolbar (`H` repeats the last colour); click a highlight to recolour, annotate or delete
 - Notes panel (`N`): filter by colour / notes, jump to a highlight, export as `.md` or save into the library as a Markdown note

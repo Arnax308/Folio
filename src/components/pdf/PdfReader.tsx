@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Check, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine,
+  ArrowLeft, BookOpen, Check, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine,
 } from 'lucide-react';
 import type { Route } from '../../App';
 import { getDoc, getPdfBlob, getPdfState, patchDoc, savePdfState, uid } from '../../lib/db';
 import { clientRectToNorm, loadPdf, mergeRects, pointToNorm, type PDFDoc } from '../../lib/pdf';
-import { useSettings } from '../../lib/settings';
+import { updateSettings, useSettings } from '../../lib/settings';
+import { SpreadView, type SpreadHandle } from './SpreadView';
 import type { DocMeta, Highlight, HighlightColor, NRect, PdfState } from '../../lib/types';
 import { createMarkdown } from '../../lib/importer';
 import { DisplayMenu } from '../ui/DisplayMenu';
@@ -108,9 +109,14 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     [state],
   );
 
+  const layout = settings.pdfLayout;
+  const spread = layout === 'spread';
+  const spreadRef = useRef<SpreadHandle>(null);
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+
   const scale = useMemo(() => {
     if (!sizes.length || !box.w) return 1;
-    if (typeof zoom === 'number') return zoom;
     let maxW = 0;
     let maxH = 0;
     sizes.forEach((s, i) => {
@@ -118,10 +124,13 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
       maxW = Math.max(maxW, r ? s.h : s.w);
       maxH = Math.max(maxH, r ? s.w : s.h);
     });
+    // Two-page view always fits the whole spread on screen (arrows + gutters ≈ 150px).
+    if (spread) return clamp(Math.min((box.w - 150) / (2 * maxW), (box.h - 52 - 64) / maxH), 0.2, 4);
+    if (typeof zoom === 'number') return zoom;
     const fitW = Math.min(box.w - 64, 940) / maxW;
     if (zoom === 'fit-width') return clamp(fitW, 0.25, 5);
     return clamp(Math.min(fitW, (box.h - PAD_TOP - GAP) / maxH), 0.25, 5);
-  }, [zoom, sizes, box, rotOf]);
+  }, [zoom, sizes, box, rotOf, spread]);
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
 
@@ -183,6 +192,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     if (restored.current || !doc || !meta || !box.w) return;
     restored.current = true;
     const n = meta.lastPage ?? 1;
+    if (layoutRef.current === 'spread') return; // SpreadView opens at initialPage itself
     const el = pagesRef.current?.children[n - 1] as HTMLElement | undefined;
     if (el && scroller.current && n > 1) scroller.current.scrollTop = el.offsetTop + pagesRef.current!.offsetTop - PAD_TOP + 8;
   }, [doc, meta, box.w, scale]);
@@ -208,7 +218,22 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     );
     Array.from(pages.children).forEach((c) => io.observe(c));
     return () => io.disconnect();
-  }, [doc, sizes]);
+  }, [doc, sizes, layout]);
+
+  // Coming back from two-page view: land on the page you were reading.
+  const prevLayout = useRef(layout);
+  useLayoutEffect(() => {
+    if (prevLayout.current === layout) return;
+    prevLayout.current = layout;
+    if (layout !== 'scroll') return;
+    const el = pagesRef.current?.children[current - 1] as HTMLElement | undefined;
+    if (el && scroller.current) scroller.current.scrollTop = el.offsetTop + pagesRef.current!.offsetTop - PAD_TOP + 4;
+  }, [layout, current]);
+
+  const onSpreadPage = useCallback((first: number, p: number) => {
+    setCurrent(first);
+    setProgress(p);
+  }, []);
 
   const onScroll = useCallback(() => {
     const sc = scroller.current;
@@ -234,6 +259,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   }, [doc, scale, onScroll]);
 
   const goTo = useCallback((n: number, yFrac?: number) => {
+    if (layoutRef.current === 'spread') return spreadRef.current?.goTo(n);
     const sc = scroller.current;
     const pages = pagesRef.current;
     const el = pages?.children[n - 1] as HTMLElement | undefined;
@@ -262,6 +288,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
+      if (layoutRef.current === 'spread') return;
       acc += e.deltaY;
       if (raf) return;
       raf = requestAnimationFrame(() => {
@@ -303,7 +330,8 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
       return;
     }
     const r = s.getRangeAt(0);
-    if (!pagesRef.current?.contains(r.commonAncestorContainer) || !s.toString().trim()) {
+    const inPage = (r.commonAncestorContainer instanceof Element ? r.commonAncestorContainer : r.commonAncestorContainer.parentElement)?.closest('.pages, .book');
+    if (!inPage || !scroller.current?.contains(inPage) || !s.toString().trim()) {
       selRange.current = null;
       setSel(null);
       return;
@@ -335,10 +363,15 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     (color: HighlightColor, withNote = false) => {
       const s = window.getSelection();
       const range = selRange.current;
-      const pages = pagesRef.current;
-      if (!s || !range || !pages) return;
+      const root = scroller.current;
+      if (!s || !range || !root) return;
       const text = s.toString().replace(/\s+/g, ' ').trim();
-      const pageEls = Array.from(pages.children as HTMLCollectionOf<HTMLElement>).filter((el) => visible.has(Number(el.dataset.page)));
+      // Only pages actually on screen: skip pre-rendered/turning pages in the two-page view.
+      const pageEls = Array.from(root.querySelectorAll<HTMLElement>('.page[data-page]')).filter((el) => {
+        const role = el.closest<HTMLElement>('[data-role]')?.dataset.role;
+        if (role && role !== 'rest') return false;
+        return layoutRef.current === 'spread' || visible.has(Number(el.dataset.page));
+      });
       const pageRects = pageEls.map((el) => ({ n: Number(el.dataset.page), r: el.getBoundingClientRect() }));
       const byPage = new Map<number, NRect[]>();
       for (const cr of Array.from(range.getClientRects())) {
@@ -421,7 +454,16 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
       if (mod && e.key === '-') return e.preventDefault(), zoomOut();
       if (mod && e.key === '0') return e.preventDefault(), applyZoom('fit-width');
       if (typing || mod || e.altKey) return;
+      if (layoutRef.current === 'spread') {
+        const nextKeys = ['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'j'];
+        const prevKeys = ['ArrowLeft', 'ArrowUp', 'PageUp', 'k'];
+        if (nextKeys.includes(e.key)) return e.preventDefault(), spreadRef.current?.next();
+        if (prevKeys.includes(e.key)) return e.preventDefault(), spreadRef.current?.prev();
+      }
       switch (e.key) {
+        case 'd':
+          updateSettings({ pdfLayout: layoutRef.current === 'spread' ? 'scroll' : 'spread' });
+          break;
         case '+':
         case '=':
           zoomIn();
@@ -499,7 +541,17 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         </div>
 
         <div className="bar-right">
-          <div className="zoom-group">
+          <button
+            className={'icon-btn' + (spread ? ' active' : '')}
+            data-tip={spread ? 'Scroll view  D' : 'Two-page view  D'}
+            aria-label="Toggle two-page view"
+            aria-pressed={spread}
+            onClick={() => updateSettings({ pdfLayout: spread ? 'scroll' : 'spread' })}
+          >
+            <BookOpen size={17} />
+          </button>
+          <span className="divider-v" />
+          <div className={'zoom-group' + (spread ? ' off' : '')}>
             <button className="icon-btn" data-tip="Zoom out  −" aria-label="Zoom out" onClick={zoomOut}>
               <ZoomOut size={17} />
             </button>
@@ -565,7 +617,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         )}
 
         <div
-          className="scroller"
+          className={'scroller' + (spread ? ' spread-mode' : '')}
           ref={scroller}
           onScroll={onScroll}
           onPointerDown={(e) => (e.target as HTMLElement).closest('.textLayer')?.classList.add('selecting')}
@@ -586,6 +638,22 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
             <div className="reader-loading">
               <div className="loading-page shimmer" />
             </div>
+          ) : spread ? (
+            <SpreadView
+              ref={spreadRef}
+              doc={doc}
+              sizes={sizes}
+              scale={scale}
+              rotOf={rotOf}
+              highlightsByPage={highlightsByPage}
+              activeId={pop?.id ?? null}
+              flashId={flash}
+              search={sideTab === 'search' && leftOpen ? query : ''}
+              cover={settings.spreadCover}
+              animate={settings.pageTurn}
+              initialPage={restored.current ? current : (meta?.lastPage ?? 1)}
+              onPage={onSpreadPage}
+            />
           ) : (
             <div className="pages" ref={pagesRef}>
               {sizes.map((s, i) => (

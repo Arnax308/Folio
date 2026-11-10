@@ -1,6 +1,6 @@
 import { Type } from 'lucide-react';
 import { updateSettings, useSettings } from '../../lib/settings';
-import { PopoverButton, Slider, ThemePicker } from './ui';
+import { PopoverButton, Slider, Switch, ThemePicker } from './ui';
 
 export function DisplayMenu({ mode }: { mode: 'pdf' | 'md' }) {
   const s = useSettings();
@@ -22,6 +22,15 @@ export function DisplayMenu({ mode }: { mode: 'pdf' | 'md' }) {
                   <button className={s.pageFilter === 'night' ? 'on' : ''} onClick={() => updateSettings({ pageFilter: 'night' })}>Night</button>
                 </div>
               </div>
+              <div className="menu-label">Layout</div>
+              <div style={{ padding: '4px 8px 6px' }}>
+                <div className="segmented full">
+                  <button className={s.pdfLayout === 'scroll' ? 'on' : ''} onClick={() => updateSettings({ pdfLayout: 'scroll' })}>Scroll</button>
+                  <button className={s.pdfLayout === 'spread' ? 'on' : ''} onClick={() => updateSettings({ pdfLayout: 'spread' })}>Two pages</button>
+                </div>
+              </div>
+              <Switch label="Page-turn animation" hint="Flip pages like a book" checked={s.pageTurn} onChange={(v) => updateSettings({ pageTurn: v })} />
+              <Switch label="Cover on its own" hint="Start spreads from page 2" checked={s.spreadCover} onChange={(v) => updateSettings({ spreadCover: v })} />
             </>
           ) : (
             <>

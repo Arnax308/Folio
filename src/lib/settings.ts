@@ -8,6 +8,9 @@ export interface Settings {
   mdFont: 'serif' | 'sans';
   mdSize: number; // px
   mdWidth: number; // ch
+  pdfLayout: 'scroll' | 'spread';
+  pageTurn: boolean; // animated page flip in two-page view
+  spreadCover: boolean; // show page 1 on its own, like a book cover
 }
 
 const KEY = 'folio.settings';
@@ -17,6 +20,9 @@ const defaults: Settings = {
   mdFont: 'serif',
   mdSize: 19,
   mdWidth: 68,
+  pdfLayout: 'scroll',
+  pageTurn: !matchMedia('(prefers-reduced-motion: reduce)').matches,
+  spreadCover: true,
 };
 
 let current: Settings = (() => {
