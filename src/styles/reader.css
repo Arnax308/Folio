@@ -987,15 +987,26 @@
 .scroller.spread-mode {
   overflow: hidden;
 }
-.spread-stage {
+.spread-root {
   position: absolute;
   inset: 52px 0 0 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 22px;
-  padding: 18px 0 42px;
   user-select: none;
+}
+.spread-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.book-wrap {
+  margin: auto; /* centres when it fits, scrolls cleanly when zoomed past the edges */
+  padding: 18px 76px 44px;
+}
+.curl-canvas {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
 }
 .book {
   position: relative;
@@ -1173,6 +1184,10 @@
 }
 
 .spread-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 6;
+  translate: 0 -50%;
   display: grid;
   place-items: center;
   width: 44px;
@@ -1186,7 +1201,13 @@
   opacity: 0.55;
   transition: opacity 0.2s var(--ease), transform 0.2s var(--ease), background 0.2s;
 }
-.spread-stage:hover .spread-nav:not(:disabled) {
+.spread-nav.prev {
+  left: 18px;
+}
+.spread-nav.next {
+  right: 18px;
+}
+.spread-root:hover .spread-nav:not(:disabled) {
   opacity: 1;
 }
 .spread-nav:hover {
@@ -1202,6 +1223,8 @@
   pointer-events: none;
 }
 .spread-pos {
+  z-index: 6;
+  pointer-events: none;
   position: absolute;
   bottom: 12px;
   left: 50%;

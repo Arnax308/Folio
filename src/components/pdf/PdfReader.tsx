@@ -30,6 +30,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   const [state, setState] = useState<PdfState | null>(null);
   const [error, setError] = useState('');
   const [zoom, setZoom] = useState<Zoom>('fit-width');
+  const [spreadZoom, setSpreadZoom] = useState(1); // multiplier on "fit spread"; 1 = whole spread visible
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [visible, setVisible] = useState<Set<number>>(() => new Set([1, 2]));
   const [current, setCurrent] = useState(1);
@@ -124,13 +125,14 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
       maxW = Math.max(maxW, r ? s.h : s.w);
       maxH = Math.max(maxH, r ? s.w : s.h);
     });
-    // Two-page view always fits the whole spread on screen (arrows + gutters ≈ 150px).
-    if (spread) return clamp(Math.min((box.w - 150) / (2 * maxW), (box.h - 52 - 64) / maxH), 0.2, 4);
+    // Two-page view always fits the whole spread on screen (side padding + arrows ≈ 164px).
+    // Two-page view: fit the whole spread on screen (side padding + arrows ≈ 164px), then apply its own zoom.
+    if (spread) return clamp(Math.min((box.w - 164) / (2 * maxW), (box.h - 52 - 70) / maxH) * spreadZoom, 0.15, 6);
     if (typeof zoom === 'number') return zoom;
     const fitW = Math.min(box.w - 64, 940) / maxW;
     if (zoom === 'fit-width') return clamp(fitW, 0.25, 5);
     return clamp(Math.min(fitW, (box.h - PAD_TOP - GAP) / maxH), 0.25, 5);
-  }, [zoom, sizes, box, rotOf, spread]);
+  }, [zoom, sizes, box, rotOf, spread, spreadZoom]);
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
 
@@ -272,6 +274,12 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   /* ------------------------------- Zoom -------------------------------- */
   const applyZoom = useCallback(
     (z: Zoom) => {
+      if (layoutRef.current === 'spread') {
+        // fit modes reset the spread; absolute zooms are converted to a multiplier of the fit size
+        const fit = scaleRef.current / spreadZoomRef.current;
+        setSpreadZoom(typeof z === 'number' ? clamp(z / fit, 0.5, 5) : 1);
+        return;
+      }
       captureAnchor();
       setZoom(z);
     },
@@ -279,6 +287,8 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   );
   const zoomIn = useCallback(() => applyZoom(STEPS.find((s) => s > scaleRef.current + 0.01) ?? 5), [applyZoom]);
   const zoomOut = useCallback(() => applyZoom([...STEPS].reverse().find((s) => s < scaleRef.current - 0.01) ?? 0.25), [applyZoom]);
+  const spreadZoomRef = useRef(spreadZoom);
+  spreadZoomRef.current = spreadZoom;
 
   useEffect(() => {
     const sc = scroller.current;
@@ -288,7 +298,11 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      if (layoutRef.current === 'spread') return;
+      if (layoutRef.current === 'spread') {
+        const f = Math.exp(-e.deltaY * 0.0022);
+        setSpreadZoom((z) => clamp(Math.round(z * f * 100) / 100, 0.5, 5));
+        return;
+      }
       acc += e.deltaY;
       if (raf) return;
       raf = requestAnimationFrame(() => {
@@ -551,7 +565,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
             <BookOpen size={17} />
           </button>
           <span className="divider-v" />
-          <div className={'zoom-group' + (spread ? ' off' : '')}>
+          <div className="zoom-group">
             <button className="icon-btn" data-tip="Zoom out  −" aria-label="Zoom out" onClick={zoomOut}>
               <ZoomOut size={17} />
             </button>
@@ -559,17 +573,17 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
               {(close) => (
                 <>
                   <button className="menu-item" onClick={() => (applyZoom('fit-width'), close())}>
-                    <ScanLine size={15} /> Fit width <span className="menu-right">{zoom === 'fit-width' ? <Check size={14} /> : <span className="kbd">0</span>}</span>
+                    <ScanLine size={15} /> Fit width <span className="menu-right">{!spread && zoom === 'fit-width' ? <Check size={14} /> : <span className="kbd">0</span>}</span>
                   </button>
                   <button className="menu-item" onClick={() => (applyZoom('fit-page'), close())}>
-                    <Maximize2 size={15} /> Fit page <span className="menu-right">{zoom === 'fit-page' ? <Check size={14} /> : <span className="kbd">9</span>}</span>
+                    <Maximize2 size={15} /> Fit page <span className="menu-right">{(spread ? spreadZoom === 1 : zoom === 'fit-page') ? <Check size={14} /> : <span className="kbd">9</span>}</span>
                   </button>
                   <div className="menu-sep" />
                   {[0.5, 0.75, 1, 1.25, 1.5, 2, 3].map((z) => (
                     <button key={z} className="menu-item" onClick={() => (applyZoom(z), close())}>
                       <span style={{ width: 15 }} />
                       {z * 100}%
-                      {zoom === z && <span className="menu-right"><Check size={14} /></span>}
+                      {!spread && zoom === z && <span className="menu-right"><Check size={14} /></span>}
                     </button>
                   ))}
                 </>
@@ -651,6 +665,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
               search={sideTab === 'search' && leftOpen ? query : ''}
               cover={settings.spreadCover}
               animate={settings.pageTurn}
+              pageFilter={settings.pageFilter}
               initialPage={restored.current ? current : (meta?.lastPage ?? 1)}
               onPage={onSpreadPage}
             />
