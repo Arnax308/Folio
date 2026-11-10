@@ -5,6 +5,7 @@ import { getDoc, getMarkdown, getMdState, patchDoc, saveMdState, uid } from '../
 import { wordCount, type TocItem } from '../../lib/markdown';
 import { CONTEXT, indexText, locate, rangeToOffsets, unwrapAll, wrapOffsets } from '../../lib/mdAnchor';
 import { useSettings } from '../../lib/settings';
+import { useDocTitle, usePaletteProvider, type PaletteItem } from '../../lib/appState';
 import type { Annotation, DocMeta, HighlightColor, MdHighlight } from '../../lib/types';
 import { createMarkdown } from '../../lib/importer';
 import { DisplayMenu } from '../ui/DisplayMenu';
@@ -216,6 +217,23 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [go, id, createHighlight, lastColor, pop, sel]);
+
+  useDocTitle(meta?.name);
+  const paletteProvider = useCallback(
+    (): PaletteItem[] => [
+      ...toc.map((t) => ({
+        id: 'md-h-' + t.id,
+        title: t.text,
+        group: 'Headings',
+        hint: 'H' + t.level,
+        run: () => article.current?.querySelector(`[id="${CSS.escape(t.id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      })),
+      { id: 'md-edit', title: 'Edit this document', hint: 'E', group: 'This document', run: () => go({ view: 'edit', id }) },
+      { id: 'md-notes', title: 'Show or hide notes', hint: 'N', group: 'This document', keywords: 'highlights panel', run: () => setNotesOpen((o) => !o) },
+    ],
+    [toc, go, id],
+  );
+  usePaletteProvider('md', paletteProvider);
 
   const exportMd = () => meta && hls && highlightsToMarkdown(meta.name, hls, mdSort, mdLabel);
 

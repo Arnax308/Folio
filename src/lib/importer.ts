@@ -1,4 +1,4 @@
-import { getFlag, saveMarkdown, savePdfBlob, setFlag, uid, upsertDoc, listDocs } from './db';
+import { getFlag, patchDoc, saveMarkdown, savePdfBlob, setFlag, uid, upsertDoc, listDocs } from './db';
 import { renderCover } from './pdf';
 import { wordCount } from './markdown';
 import type { DocMeta } from './types';
@@ -6,20 +6,31 @@ import type { DocMeta } from './types';
 const isMd = (f: File) => /\.(md|markdown|mdown|mkd|txt)$/i.test(f.name) || f.type === 'text/markdown';
 const isPdf = (f: File) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
 
-export async function importFiles(files: File[]): Promise<DocMeta[]> {
+/** `paths[i]` is the file's location on disk when it was opened from Explorer (desktop only). */
+export async function importFiles(files: File[], paths?: (string | undefined)[]): Promise<DocMeta[]> {
   const out: DocMeta[] = [];
   const existing = await listDocs();
-  for (const f of files) {
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const path = paths?.[i];
     const now = Date.now();
     // Re-opening the same file (e.g. double-click in Explorer) reuses the library entry, keeping highlights.
     const kind = isPdf(f) ? 'pdf' : 'md';
     const name = kind === 'pdf' ? f.name.replace(/\.pdf$/i, '') : f.name.replace(/\.(md|markdown|mdown|mkd|txt)$/i, '');
-    const dup = existing.find((d) => d.kind === kind && d.name === name && d.size === f.size);
-    if (dup) {
-      out.push(dup);
+    const byPath = path ? existing.find((d) => d.sourcePath === path && d.kind === kind) : undefined;
+    if (byPath && kind === 'md') {
+      // The file on disk is the source of truth for a linked Markdown document.
+      const text = await f.text();
+      await saveMarkdown(byPath.id, text);
+      out.push((await patchDoc(byPath.id, { words: wordCount(text), size: text.length, openedAt: now })) ?? byPath);
       continue;
     }
-    const base = { id: uid(), size: f.size, addedAt: now, openedAt: now, updatedAt: now, progress: 0 };
+    const dup = byPath ?? existing.find((d) => d.kind === kind && d.name === name && d.size === f.size && !(path && d.sourcePath));
+    if (dup) {
+      out.push(path && !dup.sourcePath ? ((await patchDoc(dup.id, { sourcePath: path })) ?? dup) : dup);
+      continue;
+    }
+    const base = { id: uid(), size: f.size, addedAt: now, openedAt: now, updatedAt: now, progress: 0, ...(path ? { sourcePath: path } : {}) };
     if (isPdf(f)) {
       const buf = await f.arrayBuffer();
       let cover: string | undefined;
@@ -117,6 +128,22 @@ function greet(reader: string) {
   return \`Happy reading, \${reader}.\`;
 }
 \`\`\`
+
+## Math, footnotes and pictures
+
+Inline math like $e^{i\\pi} + 1 = 0$ and display math both work:
+
+$$
+\\int_0^1 x^2 \\, dx = \\frac{1}{3}
+$$
+
+Footnotes[^1] collect at the bottom, and you can paste or drop images straight into the editor.
+
+[^1]: Like this one.
+
+## Getting around
+
+Press \`Ctrl K\` anywhere for the command palette: jump to any document, heading, page or bookmark.
 
 - [x] Open Folio
 - [ ] Drop in a PDF

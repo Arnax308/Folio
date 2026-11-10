@@ -1,7 +1,9 @@
 import MarkdownIt, { type MarkdownIt as MD } from 'markdown-it';
 import taskLists from 'markdown-it-task-lists';
+import footnote from 'markdown-it-footnote';
 import hljs from 'highlight.js/lib/common';
 import DOMPurify from 'dompurify';
+import katex from 'katex';
 
 export interface TocItem { id: string; text: string; level: number }
 
@@ -11,9 +13,80 @@ const slugify = (s: string) =>
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+function renderMath(tex: string, display: boolean) {
+  try {
+    return katex.renderToString(tex, { displayMode: display, throwOnError: false, output: 'html', strict: 'ignore' });
+  } catch {
+    return `<code class="math-error">${escapeHtml(tex)}</code>`;
+  }
+}
+
+/** `$inline$` and `$$display$$` math, rendered with KaTeX. */
+function mathPlugin(md: MD) {
+  md.inline.ruler.after('escape', 'math_inline', (state, silent) => {
+    const src = state.src;
+    const start = state.pos;
+    if (src[start] !== '$' || src[start + 1] === '$') return false;
+    const first = src[start + 1];
+    if (!first || /\s/.test(first)) return false; // "$5 and $10" is money, not math
+    let end = start + 1;
+    while ((end = src.indexOf('$', end)) !== -1 && src[end - 1] === '\\') end++;
+    if (end === -1 || end >= state.posMax || end - start < 2) return false;
+    if (/\s/.test(src[end - 1]) || /\d/.test(src[end + 1] ?? '')) return false;
+    if (!silent) {
+      const t = state.push('math_inline', 'math', 0);
+      t.content = src.slice(start + 1, end);
+      t.markup = '$';
+    }
+    state.pos = end + 1;
+    return true;
+  });
+
+  md.block.ruler.after(
+    'blockquote',
+    'math_block',
+    (state, startLine, endLine, silent) => {
+      const lineText = (l: number) => state.src.slice(state.bMarks[l] + state.tShift[l], state.eMarks[l]);
+      const head = lineText(startLine);
+      if (!head.startsWith('$$')) return false;
+      const body: string[] = [];
+      let line = startLine;
+      let rest = head.slice(2);
+      let closed = false;
+      if (rest.trim().endsWith('$$') && rest.trim().length >= 2) {
+        rest = rest.trim().slice(0, -2);
+        closed = true;
+      }
+      body.push(rest);
+      while (!closed && ++line < endLine) {
+        const text = lineText(line);
+        if (text.trim().endsWith('$$')) {
+          body.push(text.trim().slice(0, -2));
+          closed = true;
+        } else body.push(text);
+      }
+      if (!closed) return false;
+      if (silent) return true;
+      const t = state.push('math_block', 'math', 0);
+      t.block = true;
+      t.content = body.join('\n').trim();
+      t.map = [startLine, line + 1];
+      t.markup = '$$';
+      state.line = line + 1;
+      return true;
+    },
+    { alt: ['paragraph', 'reference', 'blockquote', 'list'] },
+  );
+
+  md.renderer.rules.math_inline = (tokens, i) => renderMath(tokens[i].content, false);
+  md.renderer.rules.math_block = (tokens, i) => `<div class="math-block">${renderMath(tokens[i].content, true)}</div>\n`;
+}
+
 function createMd() {
   const md: MD = new MarkdownIt({ html: true, linkify: true, typographer: true });
   md.use(taskLists, { enabled: false, label: true });
+  md.use(footnote);
+  md.use(mathPlugin);
 
   md.renderer.rules.fence = (tokens, idx) => {
     const t = tokens[idx];
@@ -74,7 +147,10 @@ export function renderMarkdown(src: string): { html: string; toc: TocItem[] } {
 }
 
 export function wordCount(src: string) {
-  const text = src.replace(/```[\s\S]*?```/g, ' ').replace(/[#>*_`~\-[\]()!|]/g, ' ');
+  const text = src
+    .replace(/data:image\/[^\s)]+/g, ' ') // embedded pictures aren't words
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#>*_`~\-[\]()!|]/g, ' ');
   const m = text.match(/[\p{L}\p{N}']+/gu);
   return m ? m.length : 0;
 }

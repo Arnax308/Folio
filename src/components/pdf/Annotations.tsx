@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Copy, Download, FilePlus, Highlighter, MessageSquare, Trash, X } from 'lucide-react';
+import { Copy, Download, FileDown, FilePlus, Highlighter, MessageSquare, Trash, X } from 'lucide-react';
 import { HIGHLIGHT_COLORS, type Annotation, type HighlightColor } from '../../lib/types';
 import { timeAgo } from '../ui/ui';
 
@@ -154,6 +154,7 @@ export function NotesPanel<T extends Annotation>({
   onDelete,
   onExport,
   onExportNote,
+  onExportPdf,
   activeId,
   sortKey,
   label,
@@ -166,6 +167,7 @@ export function NotesPanel<T extends Annotation>({
   onDelete: (id: string) => void;
   onExport: () => void;
   onExportNote: () => void;
+  onExportPdf?: () => void;
   activeId: string | null;
   sortKey: (h: T) => number;
   label: (h: T) => string;
@@ -193,6 +195,11 @@ export function NotesPanel<T extends Annotation>({
           </div>
         </div>
         <div className="notes-actions">
+          {onExportPdf && (
+            <button className="icon-btn sm" data-tip="Export PDF with highlights" aria-label="Export PDF with highlights" onClick={onExportPdf} disabled={!highlights.length}>
+              <FileDown size={15} />
+            </button>
+          )}
           <button className="icon-btn sm" data-tip="Save as Markdown note" aria-label="Save as Markdown note" onClick={onExportNote} disabled={!highlights.length}>
             <FilePlus size={15} />
           </button>

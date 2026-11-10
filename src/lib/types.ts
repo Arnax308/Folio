@@ -13,6 +13,7 @@ export interface DocMeta {
   pageCount?: number;
   words?: number;
   cover?: string; // data URL thumbnail
+  sourcePath?: string; // desktop: the file on disk this document came from
 }
 
 export interface NRect { x: number; y: number; w: number; h: number } // normalised 0..1, unrotated page space
@@ -49,6 +50,7 @@ export interface PdfState {
   highlights: Highlight[];
   pageRotations: Record<number, number>;
   rotation: number;
+  bookmarks?: number[]; // bookmarked page numbers
   zoom?: number | 'fit-width' | 'fit-page';
 }
 

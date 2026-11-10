@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { ChevronRight, LayoutGrid, List, RotateCcw, RotateCw, Search, X } from 'lucide-react';
+import { Bookmark, ChevronRight, LayoutGrid, List, RotateCcw, RotateCw, Search, X } from 'lucide-react';
 import type { PDFDoc } from '../../lib/pdf';
 import { getPage, type PageSize } from './PageView';
 
@@ -14,6 +14,8 @@ interface Props {
   rotationOf: (n: number) => number;
   rotatePage: (n: number, delta: number) => void;
   hlCount: Record<number, number>;
+  bookmarks: number[];
+  toggleBookmark: (n: number) => void;
   goTo: (n: number, y?: number) => void;
   query: string;
   setQuery: (q: string) => void;
@@ -46,7 +48,7 @@ export function Sidebar(p: Props) {
 }
 
 /* ----------------------------- Thumbnails ----------------------------- */
-function Thumbs({ doc, sizes, current, rotationOf, rotatePage, hlCount, goTo }: Props) {
+function Thumbs({ doc, sizes, current, rotationOf, rotatePage, hlCount, goTo, bookmarks, toggleBookmark }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = listRef.current?.querySelector<HTMLElement>(`[data-thumb="${current}"]`);
@@ -54,6 +56,20 @@ function Thumbs({ doc, sizes, current, rotationOf, rotatePage, hlCount, goTo }: 
   }, [current]);
   return (
     <div className="thumbs" ref={listRef}>
+      {bookmarks.length > 0 && (
+        <div className="bm-strip">
+          <div className="bm-label">
+            <Bookmark size={12} /> Bookmarks
+          </div>
+          <div className="bm-chips">
+            {[...bookmarks].sort((a, b) => a - b).map((n) => (
+              <button key={n} className={'bm-chip' + (n === current ? ' on' : '')} onClick={() => goTo(n)}>
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {sizes.map((s, i) => (
         <Thumb
           key={i}
@@ -63,6 +79,8 @@ function Thumbs({ doc, sizes, current, rotationOf, rotatePage, hlCount, goTo }: 
           rotation={rotationOf(i + 1)}
           active={current === i + 1}
           count={hlCount[i + 1] || 0}
+          bookmarked={bookmarks.includes(i + 1)}
+          onBookmark={() => toggleBookmark(i + 1)}
           onClick={() => goTo(i + 1)}
           onRotate={(d) => rotatePage(i + 1, d)}
         />
@@ -73,9 +91,10 @@ function Thumbs({ doc, sizes, current, rotationOf, rotatePage, hlCount, goTo }: 
 
 const THUMB_W = 132;
 const Thumb = memo(function Thumb({
-  doc, n, size, rotation, active, count, onClick, onRotate,
+  doc, n, size, rotation, active, count, bookmarked, onClick, onRotate, onBookmark,
 }: {
-  doc: PDFDoc; n: number; size: PageSize; rotation: number; active: boolean; count: number; onClick: () => void; onRotate: (d: number) => void;
+  doc: PDFDoc; n: number; size: PageSize; rotation: number; active: boolean; count: number; bookmarked: boolean;
+  onClick: () => void; onRotate: (d: number) => void; onBookmark: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
@@ -128,6 +147,14 @@ const Thumb = memo(function Thumb({
           <div className="thumb-skel shimmer" />
         )}
         {count > 0 && <span className="thumb-badge">{count}</span>}
+      </button>
+      <button
+        className={'thumb-bm' + (bookmarked ? ' on' : '')}
+        aria-label={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
+        aria-pressed={bookmarked}
+        onClick={onBookmark}
+      >
+        <Bookmark size={13} fill={bookmarked ? 'currentColor' : 'none'} />
       </button>
       <div className="thumb-foot">
         <button className="icon-btn sm" aria-label="Rotate page left" data-tip="Rotate left" onClick={() => onRotate(-90)}>

@@ -15,6 +15,7 @@ interface Props {
   activeId: string | null;
   flashId: string | null;
   search: string;
+  bookmarked?: boolean;
 }
 
 const pageCache = new WeakMap<PDFDoc, Map<number, Promise<pdfjs.PDFPageProxy>>>();
@@ -26,38 +27,59 @@ export function getPage(doc: PDFDoc, n: number) {
   return p;
 }
 
+/**
+ * Marks every occurrence of `q` in the text layer. Matches may run across several spans and
+ * across line breaks (pdf.js puts a <br> after each line), so the page text is searched as one string.
+ */
 function markSearch(layer: HTMLElement, q: string) {
   layer.querySelectorAll('mark.search-hit').forEach((m) => {
     const p = m.parentNode!;
     p.replaceChild(document.createTextNode(m.textContent || ''), m);
     p.normalize();
   });
-  if (!q) return;
-  const needle = q.toLowerCase();
-  layer.querySelectorAll('span:not(.markedContent)').forEach((span) => {
-    const node = span.firstChild;
-    if (!node || node.nodeType !== 3) return;
-    const text = node.textContent || '';
-    const lower = text.toLowerCase();
-    let i = lower.indexOf(needle);
-    if (i < 0) return;
-    const frag = document.createDocumentFragment();
-    let last = 0;
-    while (i >= 0) {
-      frag.append(text.slice(last, i));
+  const needle = q.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!needle) return;
+
+  const nodes: Text[] = [];
+  const starts: number[] = [];
+  let hay = '';
+  const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.nodeType === Node.TEXT_NODE) {
+      const data = (n as Text).data;
+      nodes.push(n as Text);
+      starts.push(hay.length);
+      // one haystack character per source character, so offsets map straight back to the node
+      for (const ch of data) hay += ch.length === 1 ? ((ch.toLowerCase().length === 1 ? ch.toLowerCase() : ch).replace(/\s/, ' ')) : ch;
+    } else if ((n as Element).tagName === 'BR' && hay && !hay.endsWith(' ')) {
+      hay += ' '; // a line break reads as a space
+    }
+  }
+
+  const hits: [number, number][] = [];
+  for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + needle.length)) hits.push([i, i + needle.length]);
+
+  // Wrap from the end so earlier offsets stay valid while text nodes are split.
+  for (let h = hits.length - 1; h >= 0; h--) {
+    const [from, to] = hits[h];
+    for (let k = nodes.length - 1; k >= 0; k--) {
+      const base = starts[k];
+      const len = nodes[k].data.length;
+      if (base >= to || base + len <= from) continue;
+      const s = Math.max(0, from - base);
+      const e = Math.min(len, to - base);
+      let target = nodes[k];
+      if (e < target.length) target.splitText(e);
+      if (s > 0) target = target.splitText(s);
       const m = document.createElement('mark');
       m.className = 'search-hit';
-      m.textContent = text.slice(i, i + needle.length);
-      frag.append(m);
-      last = i + needle.length;
-      i = lower.indexOf(needle, last);
+      target.parentNode!.insertBefore(m, target);
+      m.appendChild(target);
     }
-    frag.append(text.slice(last));
-    span.replaceChildren(frag);
-  });
+  }
 }
 
-function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, activeId, flashId, search }: Props) {
+function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, activeId, flashId, search, bookmarked }: Props) {
   const canvasWrap = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const renderedRef = useRef(0);
@@ -182,6 +204,7 @@ function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, ac
         <div className="textLayer" ref={textRef} />
       </div>
       {!rendered && <div className="page-skeleton" />}
+      {bookmarked && <span className="page-ribbon" aria-label="Bookmarked" />}
     </div>
   );
 }

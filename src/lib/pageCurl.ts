@@ -140,25 +140,48 @@ export interface CurlJob {
   originX: number; // spine, CSS px inside the overlay canvas
   originY: number; // page top, CSS px inside the overlay canvas
   side: 1 | -1;
-  duration: number;
   paper: [number, number, number];
-  onDone: () => void;
 }
 
-const PHI0 = 0.27; // initial tilt of the curl line (radians): the bottom corner leads
+export interface CurlController {
+  /** Draw the curl at progress e: 0 = lying flat on its own side, 1 = fully turned over. */
+  set: (e: number) => void;
+  /** Ease toward e a little every frame; used while a finger or mouse is dragging the page. */
+  follow: (e: number) => void;
+  /** Which corner leads the curl: 1 = bottom, -1 = top. */
+  setTilt: (sign: 1 | -1) => void;
+  animateTo: (target: 0 | 1, ms: number, onDone: () => void, ease?: (t: number) => number) => void;
+  progress: () => number;
+  cancel: () => void;
+}
 
-const easeInOut = (t: number) => 0.5 - 0.5 * Math.cos(Math.PI * t);
+const PHI0 = 0.27; // initial tilt of the curl line (radians)
+
+export const easeInOut = (t: number) => 0.5 - 0.5 * Math.cos(Math.PI * t);
+export const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 const R_END = 0.004;
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
-function curlParams(t: number, W: number, H: number) {
-  const e = easeInOut(t);
-  const phi = PHI0 * Math.pow(1 - e, 1.3);
-  // The radius follows the fold's travel (not the clock): a tight corner lift, a soft roll mid-page,
-  // then it tightens as the fold reaches the spine so the full page length lands on the other side.
+const foldStart = (W: number, H: number) => W + (H / 2) * Math.tan(PHI0) + 6;
+const foldEnd = (W: number) => (-Math.PI * W * R_END) / 2;
+
+function curlParams(e: number, W: number, H: number, tilt: number) {
+  const phi = tilt * PHI0 * Math.pow(1 - e, 1.3);
+  // The radius follows the fold's travel: a tight corner lift, a soft roll mid-page, then it
+  // tightens as the fold reaches the spine so the full page length lands on the other side.
   const r = W * (R_END + 0.012 * (1 - e) + 0.14 * Math.pow(Math.sin(Math.PI * e), 0.85));
-  const cStart = W + (H / 2) * Math.tan(PHI0) + 6;
-  const cEnd = (-Math.PI * W * R_END) / 2;
-  return { c: cStart + (cEnd - cStart) * e, r, phi, env: Math.pow(Math.sin(Math.PI * t), 0.6) };
+  const c = foldStart(W, H) + (foldEnd(W) - foldStart(W, H)) * e;
+  return { c, r, phi, env: Math.pow(Math.sin(Math.PI * e), 0.6) };
+}
+
+/**
+ * Progress that puts the page's free edge roughly under the pointer.
+ * `x` is the pointer's distance from the spine, measured toward the page's own side.
+ * (Folding a sheet at c mirrors its edge from W to about 2c − W.)
+ */
+export function progressAtPointer(x: number, W: number, H: number) {
+  const c = (x + W) / 2;
+  return clamp01((foldStart(W, H) - c) / (foldStart(W, H) - foldEnd(W)));
 }
 
 function compile(gl: WebGLRenderingContext, vs: string, fs: string) {
@@ -189,8 +212,8 @@ function texture(gl: WebGLRenderingContext, src: HTMLCanvasElement, unit: number
   return t;
 }
 
-/** Starts the curl and draws its first frame synchronously. Returns null if WebGL isn't available. */
-export function startCurl(job: CurlJob): { cancel: () => void } | null {
+/** Sets up the curl and draws it flat. Returns null if WebGL isn't available. */
+export function createCurl(job: CurlJob): CurlController | null {
   const { canvas, pageW: W, pageH: H } = job;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const cssW = canvas.clientWidth;
@@ -250,8 +273,9 @@ export function startCurl(job: CurlJob): { cancel: () => void } | null {
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   gl.depthFunc(gl.LESS);
 
-  const draw = (t: number) => {
-    const k = curlParams(Math.min(1, Math.max(0, t)), W, H);
+  let tilt = 1;
+  const draw = (e: number) => {
+    const k = curlParams(clamp01(e), W, H, tilt);
     gl.clearColor(0, 0, 0, 0);
     gl.clearDepth(1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -296,32 +320,76 @@ export function startCurl(job: CurlJob): { cancel: () => void } | null {
     gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
   };
 
+  let cur = 0;
+  let target = 0;
   let raf = 0;
-  let done = false;
-  const start = performance.now();
-  const finish = () => {
-    if (done) return;
-    done = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let following = false;
+  let dead = false;
+
+  const stop = () => {
     cancelAnimationFrame(raf);
-    clearTimeout(fallback);
-    job.onDone();
+    clearTimeout(timer);
+    following = false;
   };
-  const tick = (now: number) => {
-    const t = (now - start) / job.duration;
-    draw(t);
-    if (t >= 1) finish();
-    else raf = requestAnimationFrame(tick);
+  const set = (e: number) => {
+    cur = clamp01(e);
+    if (!dead) draw(cur);
   };
-  draw(0);
-  raf = requestAnimationFrame(tick);
-  // rAF pauses in background windows; make sure the turn still completes.
-  const fallback = setTimeout(finish, job.duration + 400);
+  set(0);
 
   return {
+    set: (e) => {
+      stop();
+      set(e);
+    },
+    follow: (e) => {
+      target = clamp01(e);
+      if (following || dead) return;
+      stop();
+      following = true;
+      const step = () => {
+        if (dead || !following) return;
+        const d = target - cur;
+        if (Math.abs(d) < 0.002) {
+          set(target);
+          following = false;
+          return;
+        }
+        set(cur + d * 0.32);
+        raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+    },
+    setTilt: (sign) => {
+      tilt = sign;
+    },
+    animateTo: (to, ms, onDone, ease = easeInOut) => {
+      stop();
+      const from = cur;
+      const start = performance.now();
+      let done = false;
+      const finish = () => {
+        if (done || dead) return;
+        done = true;
+        stop();
+        set(to);
+        onDone();
+      };
+      const tick = (now: number) => {
+        const t = clamp01((now - start) / ms);
+        set(from + (to - from) * ease(t));
+        if (t >= 1) finish();
+        else raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+      // rAF pauses in background windows; make sure the turn still completes.
+      timer = setTimeout(finish, ms + 400);
+    },
+    progress: () => cur,
     cancel: () => {
-      done = true;
-      cancelAnimationFrame(raf);
-      clearTimeout(fallback);
+      dead = true;
+      stop();
       gl.getExtension('WEBGL_lose_context')?.loseContext();
     },
   };

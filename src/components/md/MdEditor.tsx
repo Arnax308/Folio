@@ -5,14 +5,18 @@ import { languages } from '@codemirror/language-data';
 import { EditorView } from '@codemirror/view';
 import {
   ArrowLeft, BookOpen, Check, Code, Columns2, Download, Eye, Heading1, Heading2, Italic, Link, List, ListChecks, ListOrdered,
-  Minus, PenLine, Quote, Strikethrough, Table, Workflow, SquareCode, Save,
+  Image as ImageIcon, Minus, PenLine, Quote, Strikethrough, Table, Workflow, SquareCode, Save,
 } from 'lucide-react';
 import type { Route } from '../../App';
 import { getDoc, getMarkdown, patchDoc, saveMarkdown } from '../../lib/db';
 import { wordCount } from '../../lib/markdown';
 import { useDebounced, useSettings } from '../../lib/settings';
 import type { DocMeta } from '../../lib/types';
-import { folioHighlight, folioTheme, insertBlock, insertLink, linePrefix, markdownKeymap, SNIPPETS, wrap } from '../../lib/cm';
+import {
+  folioHighlight, folioTheme, imageChips, imagePaste, insertBlock, insertImageFile, insertLink, linePrefix, markdownKeymap, SNIPPETS, wrap,
+} from '../../lib/cm';
+import { baseName, isDesktop, saveAs, writeTextFile } from '../../lib/desktop';
+import { useDocTitle } from '../../lib/appState';
 import { DisplayMenu } from '../ui/DisplayMenu';
 import { download, toast } from '../ui/ui';
 import { MarkdownView } from './MarkdownView';
@@ -31,6 +35,13 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
   const viewRef = useRef<EditorView | null>(null);
   const previewScroll = useRef<HTMLDivElement>(null);
   const handleRef = useRef<FileHandle | null>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
+  // Desktop: the file on disk this document is linked to. Edits are written back to it.
+  const linkedPath = isDesktop ? meta?.sourcePath : undefined;
+  const linkedRef = useRef(linkedPath);
+  linkedRef.current = linkedPath;
+  const writeFailed = useRef(false);
+  useDocTitle(meta?.name);
   const preview = useDebounced(text ?? '', 180);
 
   useEffect(() => {
@@ -55,6 +66,16 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
     const t = setTimeout(async () => {
       await saveMarkdown(id, text);
       await patchDoc(id, { words: wordCount(text), size: text.length, updatedAt: Date.now() });
+      const path = linkedRef.current;
+      if (path) {
+        try {
+          await writeTextFile(path, text);
+          writeFailed.current = false;
+        } catch {
+          if (!writeFailed.current) toast('Couldn’t write to ' + baseName(path));
+          writeFailed.current = true;
+        }
+      }
       setSaved('saved');
     }, 500);
     return () => clearTimeout(t);
@@ -62,6 +83,23 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
 
   const saveToDisk = useCallback(async () => {
     if (text === null || !meta) return;
+    if (isDesktop) {
+      try {
+        if (meta.sourcePath) {
+          await writeTextFile(meta.sourcePath, text);
+          toast('Saved to ' + baseName(meta.sourcePath));
+          return;
+        }
+        const path = await saveAs(meta.name + '.md', text);
+        if (!path) return;
+        const m = await patchDoc(id, { sourcePath: path });
+        if (m) setMeta(m);
+        toast('Saved to ' + baseName(path) + '. Edits now save there automatically');
+      } catch {
+        toast('Could not save file');
+      }
+      return;
+    }
     const picker = (window as unknown as { showSaveFilePicker?: (o: unknown) => Promise<FileHandle> }).showSaveFilePicker;
     try {
       if (picker) {
@@ -81,7 +119,7 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
     } catch (e) {
       if ((e as Error).name !== 'AbortError') toast('Could not save file');
     }
-  }, [text, meta]);
+  }, [text, meta, id]);
   const saveRef = useRef(saveToDisk);
   saveRef.current = saveToDisk;
 
@@ -91,6 +129,8 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
       EditorView.lineWrapping,
       folioTheme,
       folioHighlight,
+      imageChips,
+      imagePaste,
       markdownKeymap(() => saveRef.current()),
       EditorView.updateListener.of((u) => {
         if (u.selectionSet || u.docChanged) {
@@ -165,7 +205,7 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
             />
           )}
           <span className={'save-state ' + saved}>
-            {saved === 'saved' ? <><Check size={13} strokeWidth={2.5} /> Saved</> : 'Saving…'}
+            {saved === 'saved' ? <><Check size={13} strokeWidth={2.5} /> {linkedPath ? 'Saved to ' + baseName(linkedPath) : 'Saved'}</> : 'Saving…'}
           </span>
         </div>
         <div className="bar-center">
@@ -185,7 +225,7 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
           <button className="icon-btn" data-tip="Download .md" aria-label="Download" onClick={() => meta && text !== null && download(meta.name + '.md', text)}>
             <Download size={17} />
           </button>
-          <button className="icon-btn" data-tip="Save to disk  Ctrl S" aria-label="Save to disk" onClick={saveToDisk}>
+          <button className="icon-btn" data-tip={linkedPath ? 'Save now  Ctrl S' : 'Save to disk  Ctrl S'} aria-label="Save to disk" onClick={saveToDisk}>
             <Save size={17} />
           </button>
           <DisplayMenu mode="md" />
@@ -216,6 +256,18 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
               <FB tip="Code block" onClick={cmd((v) => insertBlock(v, SNIPPETS.code, 6))}><SquareCode size={16} /></FB>
               <FB tip="Table" onClick={cmd((v) => insertBlock(v, SNIPPETS.table))}><Table size={16} /></FB>
               <FB tip="Mermaid diagram" onClick={cmd((v) => insertBlock(v, SNIPPETS.mermaid))}><Workflow size={16} /></FB>
+              <FB tip="Picture (or paste one)" onClick={() => imageInput.current?.click()}><ImageIcon size={16} /></FB>
+              <input
+                ref={imageInput}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f && viewRef.current) insertImageFile(viewRef.current, f);
+                  e.target.value = '';
+                }}
+              />
               <FB tip="Divider" onClick={cmd((v) => insertBlock(v, SNIPPETS.hr))}><Minus size={16} /></FB>
             </div>
             {text !== null && (

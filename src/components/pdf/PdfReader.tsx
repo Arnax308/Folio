@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, BookOpen, Check, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine,
+  ArrowLeft, Bookmark, BookOpen, Check, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine,
 } from 'lucide-react';
 import type { Route } from '../../App';
 import { getDoc, getPdfBlob, getPdfState, patchDoc, savePdfState, uid } from '../../lib/db';
 import { clientRectToNorm, loadPdf, mergeRects, pointToNorm, type PDFDoc } from '../../lib/pdf';
 import { updateSettings, useSettings } from '../../lib/settings';
+import { useDocTitle, usePaletteProvider, type PaletteItem } from '../../lib/appState';
 import { SpreadView, type SpreadHandle } from './SpreadView';
 import type { DocMeta, Highlight, HighlightColor, NRect, PdfState } from '../../lib/types';
 import { createMarkdown } from '../../lib/importer';
@@ -64,23 +65,40 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         loaded = pdf;
         if (cancelled) return pdf.destroy();
         const st = await getPdfState(id);
-        const sz: PageSize[] = [];
-        for (let i = 1; i <= pdf.numPages; i += 16) {
-          const batch = await Promise.all(
-            Array.from({ length: Math.min(16, pdf.numPages - i + 1) }, (_, k) => pdf.getPage(i + k)),
-          );
-          for (const p of batch) {
-            const vp = p.getViewport({ scale: 1 });
-            sz.push({ w: vp.width, h: vp.height });
-          }
-        }
+        // Show the document straight away: assume every page is the size of the first one,
+        // then measure the rest in the background and correct any that differ.
+        const vp1 = (await pdf.getPage(1)).getViewport({ scale: 1 });
         if (cancelled) return;
+        let sz: PageSize[] = Array.from({ length: pdf.numPages }, () => ({ w: vp1.width, h: vp1.height }));
         setMeta(m);
         setState(st);
         if (st.zoom) setZoom(st.zoom);
         setSizes(sz);
         setDoc(pdf);
         patchDoc(id, { openedAt: Date.now(), pageCount: pdf.numPages });
+
+        const BATCH = 24;
+        for (let i = 2; i <= pdf.numPages; i += BATCH) {
+          const batch = await Promise.all(
+            Array.from({ length: Math.min(BATCH, pdf.numPages - i + 1) }, (_, k) => pdf.getPage(i + k)),
+          );
+          if (cancelled) return;
+          let changed = false;
+          batch.forEach((pg, k) => {
+            const vp = pg.getViewport({ scale: 1 });
+            const cur = sz[i + k - 1];
+            if (Math.abs(vp.width - cur.w) > 0.5 || Math.abs(vp.height - cur.h) > 0.5) {
+              if (!changed) sz = sz.slice();
+              changed = true;
+              sz[i + k - 1] = { w: vp.width, h: vp.height };
+            }
+          });
+          if (changed) {
+            captureAnchor();
+            setSizes(sz);
+          }
+          await new Promise((r) => setTimeout(r, 0));
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -187,7 +205,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     const top = el.offsetTop + pages.offsetTop;
     sc.scrollTop = top + a.fy * el.offsetHeight - sc.clientHeight / 2;
     if (sc.scrollWidth > sc.clientWidth) sc.scrollLeft = a.fx * sc.scrollWidth - sc.clientWidth / 2;
-  }, [scale, state?.rotation, state?.pageRotations]);
+  }, [scale, sizes, state?.rotation, state?.pageRotations]);
 
   // Initial restore of reading position
   useLayoutEffect(() => {
@@ -316,6 +334,17 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     sc.addEventListener('wheel', onWheel, { passive: false });
     return () => sc.removeEventListener('wheel', onWheel);
   }, [doc, captureAnchor]);
+
+  /* ----------------------------- Bookmarks ----------------------------- */
+  useDocTitle(meta?.name);
+  const bookmarks = state?.bookmarks ?? NO_PAGES;
+  const toggleBookmark = useCallback((n: number) => {
+    setState((s) => {
+      if (!s) return s;
+      const cur = s.bookmarks ?? [];
+      return { ...s, bookmarks: cur.includes(n) ? cur.filter((x) => x !== n) : [...cur, n] };
+    });
+  }, []);
 
   /* ----------------------------- Rotation ------------------------------ */
   const rotateAll = useCallback(
@@ -500,6 +529,9 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         case 't':
           setLeftOpen((o) => !o);
           break;
+        case 'b':
+          toggleBookmark(current);
+          break;
         case 'n':
           setRightOpen((o) => !o);
           break;
@@ -519,7 +551,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [zoomIn, zoomOut, applyZoom, rotateAll, createHighlight, lastColor, goTo, current, sizes.length, pop, sel, go]);
+  }, [zoomIn, zoomOut, applyZoom, rotateAll, createHighlight, lastColor, goTo, current, sizes.length, pop, sel, go, toggleBookmark]);
 
   /* ------------------------------ Export ------------------------------- */
   const exportNotes = () => {
@@ -531,6 +563,45 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     await createMarkdown(`Notes — ${meta.name}`, highlightsToMarkdown(meta.name, state.highlights, pdfSort, pdfLabel));
     toast('Saved to your library as Markdown');
   };
+
+  const exportPdf = useCallback(async () => {
+    if (!meta || !state || !doc) return;
+    if (!state.highlights.length) return toast('No highlights to export yet');
+    try {
+      const blob = await getPdfBlob(id);
+      if (!blob) throw new Error('The file data is missing.');
+      const { exportAnnotatedPdf } = await import('../../lib/pdfExport');
+      const out = await exportAnnotatedPdf(await blob.arrayBuffer(), doc, state.highlights);
+      download(`${meta.name} (highlighted).pdf`, new Blob([out as BlobPart], { type: 'application/pdf' }), 'application/pdf');
+    } catch (e) {
+      console.warn(e);
+      toast('Couldn’t write highlights into this PDF');
+    }
+  }, [meta, state, doc, id]);
+
+  /* -------------------------- Command palette -------------------------- */
+  const pageTotal = sizes.length;
+  const paletteProvider = useCallback(
+    (q: string): PaletteItem[] => {
+      const group = 'This PDF';
+      const items: PaletteItem[] = [];
+      const n = Number(q.trim().replace(/^(p|pg|page)\.?\s*/i, ''));
+      if (q.trim() && Number.isInteger(n) && n >= 1 && n <= pageTotal) {
+        items.push({ id: 'pdf-goto', title: `Go to page ${n}`, group, pinned: true, run: () => goTo(n) });
+      }
+      [...bookmarks].sort((a, b) => a - b).forEach((b) => items.push({ id: 'pdf-bm-' + b, title: `Bookmark: page ${b}`, group, keywords: 'bookmarks', run: () => goTo(b) }));
+      items.push(
+        { id: 'pdf-bm-toggle', title: bookmarks.includes(current) ? 'Remove bookmark from this page' : 'Bookmark this page', hint: 'B', group, run: () => toggleBookmark(current) },
+        { id: 'pdf-search', title: 'Search in this PDF', hint: 'Ctrl F', group, keywords: 'find', run: () => (setLeftOpen(true), setSideTab('search'), setSearchFocus((x) => x + 1)) },
+        { id: 'pdf-notes', title: 'Show or hide notes', hint: 'N', group, keywords: 'highlights panel', run: () => setRightOpen((o) => !o) },
+        { id: 'pdf-export', title: 'Export PDF with highlights', group, keywords: 'save annotations download', run: exportPdf },
+        { id: 'pdf-rotate', title: 'Rotate pages clockwise', hint: 'R', group, run: () => rotateAll(90) },
+      );
+      return items;
+    },
+    [pageTotal, bookmarks, current, goTo, toggleBookmark, exportPdf, rotateAll],
+  );
+  usePaletteProvider('pdf', paletteProvider);
 
   /* ------------------------------- Render ------------------------------ */
   const popHl = pop && state?.highlights.find((h) => h.id === pop.id);
@@ -601,6 +672,15 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
             <RotateCw size={17} />
           </button>
           <span className="divider-v" />
+          <button
+            className={'icon-btn' + (bookmarks.includes(current) ? ' active' : '')}
+            data-tip={bookmarks.includes(current) ? 'Remove bookmark  B' : 'Bookmark page  B'}
+            aria-label="Toggle bookmark"
+            aria-pressed={bookmarks.includes(current)}
+            onClick={() => toggleBookmark(current)}
+          >
+            <Bookmark size={17} fill={bookmarks.includes(current) ? 'currentColor' : 'none'} />
+          </button>
           <DisplayMenu mode="pdf" />
           <button className={'icon-btn' + (rightOpen ? ' active' : '')} data-tip="Notes  N" aria-label="Toggle notes" onClick={() => setRightOpen((o) => !o)}>
             <StickyNote size={17} />
@@ -623,6 +703,8 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
             rotationOf={rotOf}
             rotatePage={rotatePage}
             hlCount={hlCount}
+            bookmarks={bookmarks}
+            toggleBookmark={toggleBookmark}
             goTo={goTo}
             query={query}
             setQuery={setQuery}
@@ -666,6 +748,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
               cover={settings.spreadCover}
               animate={settings.pageTurn}
               pageFilter={settings.pageFilter}
+              bookmarks={bookmarks}
               initialPage={restored.current ? current : (meta?.lastPage ?? 1)}
               onPage={onSpreadPage}
             />
@@ -684,6 +767,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
                   activeId={pop?.id ?? null}
                   flashId={flash}
                   search={sideTab === 'search' && leftOpen ? query : ''}
+                  bookmarked={bookmarks.includes(i + 1)}
                 />
               ))}
             </div>
@@ -701,6 +785,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
             onDelete={deleteHl}
             onExport={exportNotes}
             onExportNote={exportAsNote}
+            onExportPdf={exportPdf}
           />
         )}
       </div>
@@ -727,6 +812,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
 }
 
 const EMPTY: Highlight[] = [];
+const NO_PAGES: number[] = [];
 const pdfSort = (h: Highlight) => h.page * 10 + (h.rects[0]?.y ?? 0);
 const pdfLabel = (h: Highlight) => `Page ${h.page}`;
 

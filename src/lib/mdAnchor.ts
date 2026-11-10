@@ -3,7 +3,7 @@
  * Positions are offsets into the concatenated text of the article (ignoring diagrams and UI chrome),
  * with prefix/suffix context so highlights survive re-renders and small edits.
  */
-const SKIP = 'figure.mermaid-block, .code-copy, .code-lang';
+const SKIP = 'figure.mermaid-block, .code-copy, .code-lang, .katex';
 export const CONTEXT = 32;
 
 interface TextIndex {

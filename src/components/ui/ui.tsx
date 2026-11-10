@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Check, Moon, Sun, Coffee } from 'lucide-react';
 import { updateSettings, useSettings, type Theme } from '../../lib/settings';
+import { baseName, isDesktop, saveAs } from '../../lib/desktop';
 
 /* ------------------------------- Toasts ------------------------------- */
 type ToastItem = { id: number; text: string };
@@ -190,7 +191,14 @@ export function timeAgo(t: number) {
   return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/** Saves a file: a native "Save as" dialog in the desktop app, a normal download in the browser. */
 export function download(name: string, content: Blob | string, type = 'text/markdown') {
+  if (isDesktop) {
+    saveAs(name, content)
+      .then((path) => path && toast('Saved to ' + baseName(path)))
+      .catch(() => toast('Could not save the file'));
+    return;
+  }
   const blob = typeof content === 'string' ? new Blob([content], { type }) : content;
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BookOpen, Ellipsis, FileText, Hash, Library as LibraryIcon, PenLine, Plus, Search, Trash, Upload, ArrowUpRight, Pencil,
+  Archive, ArchiveRestore, BookOpen, Ellipsis, FileText, Hash, Library as LibraryIcon, PenLine, Plus, Search, Trash, Upload, ArrowUpRight, Pencil,
 } from 'lucide-react';
 import type { Route } from '../App';
 import type { DocMeta } from '../lib/types';
 import { deleteDoc, listDocs, patchDoc } from '../lib/db';
 import { createMarkdown, importFiles, seedIfFirstRun } from '../lib/importer';
 import { ThemePicker, timeAgo, toast, useDismiss } from './ui/ui';
+import { backupLibrary, LIBRARY_CHANGED, restoreLibrary } from './ui/actions';
 
 type Filter = 'all' | 'pdf' | 'md';
 
@@ -28,10 +29,13 @@ export default function Library({ go }: { go: (r: Route) => void }) {
   const [busy, setBusy] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const backupInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => setDocs(await listDocs()), []);
   useEffect(() => {
     seedIfFirstRun().then(refresh);
+    window.addEventListener(LIBRARY_CHANGED, refresh);
+    return () => window.removeEventListener(LIBRARY_CHANGED, refresh);
   }, [refresh]);
 
   const open = useCallback(
@@ -149,10 +153,37 @@ export default function Library({ go }: { go: (r: Route) => void }) {
         </nav>
         <div className="side-spacer" />
         <div className="side-card">
+          <div className="side-card-title">Backup</div>
+          <div className="backup-row">
+            <button className="backup-btn" onClick={backupLibrary} data-tip="Save everything to a .zip" data-tip-pos="top">
+              <Archive size={14} /> Back up
+            </button>
+            <button className="backup-btn" onClick={() => backupInput.current?.click()} data-tip="Load a Folio backup" data-tip-pos="top">
+              <ArchiveRestore size={14} /> Restore
+            </button>
+          </div>
+          <input
+            ref={backupInput}
+            type="file"
+            hidden
+            accept=".zip,application/zip"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) restoreLibrary(f);
+            }}
+          />
+        </div>
+        <div className="side-card">
           <div className="side-card-title">Appearance</div>
           <ThemePicker />
         </div>
-        <p className="side-foot">Everything stays on this device.</p>
+        <p className="side-foot">
+          Everything stays on this device.
+          <span className="side-version">
+            v{__APP_VERSION__} · <span className="kbd">Ctrl</span> <span className="kbd">K</span> to search
+          </span>
+        </p>
       </aside>
 
       <main className="lib-main">

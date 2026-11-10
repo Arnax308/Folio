@@ -50,5 +50,10 @@ export async function getMdState(id: string): Promise<MdState> {
 }
 export const saveMdState = (id: string, s: MdState) => set('state:' + id, s, store);
 
-export const getFlag = (k: string) => get<boolean>('flag:' + k, store);
+// Raw access, used by backup / restore.
+export const getRawFile = (id: string) => get<Blob | string>('file:' + id, store);
+export const getRawState = (id: string) => get<unknown>('state:' + id, store);
+export const setRawState = (id: string, s: unknown) => set('state:' + id, s, store);
+
+export const getFlag =(k: string) => get<boolean>('flag:' + k, store);
 export const setFlag = (k: string) => set('flag:' + k, true, store);

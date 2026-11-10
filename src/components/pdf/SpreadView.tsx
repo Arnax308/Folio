@@ -2,7 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { PDFDoc } from '../../lib/pdf';
 import type { Highlight } from '../../lib/types';
-import { snapshotPage, startCurl } from '../../lib/pageCurl';
+import { createCurl, easeInOut, easeOut, progressAtPointer, snapshotPage, type CurlController } from '../../lib/pageCurl';
 import { PageView, type PageSize } from './PageView';
 
 export interface SpreadHandle {
@@ -23,13 +23,28 @@ interface Props {
   cover: boolean;
   animate: boolean;
   pageFilter: string;
+  bookmarks: number[];
   initialPage: number;
   onPage: (first: number, progress: number) => void;
 }
 
 type Spread = [number | null, number | null];
-type Flip = { dir: 1 | -1; to: number; mode: 'curl' | 'rigid' };
+type Flip = { dir: 1 | -1; to: number; mode: 'curl' | 'rigid'; manual?: boolean };
 type Role = 'L' | 'R' | 'hidden' | 'fwd-front' | 'fwd-back' | 'bwd-front' | 'bwd-back' | 'curl';
+
+/** A page being dragged by its edge. */
+interface Drag {
+  dir: 1 | -1;
+  x0: number;
+  t0: number;
+  moved: boolean;
+  e: number; // curl progress under the pointer
+  tilt: 1 | -1;
+  spineX: number;
+  W: number;
+  H: number;
+  release: null | 'complete' | 'tap' | 'cancel';
+}
 
 export const TURN_MS = 900; // rigid fallback
 export const CURL_MS = 1050;
@@ -58,6 +73,8 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
   const bookRef = useRef<HTMLDivElement>(null);
   const curlCanvas = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const curlRef = useRef<CurlController | null>(null);
+  const dragRef = useRef<Drag | null>(null);
 
   // Keep the same page in view when the spread layout changes (e.g. cover toggled).
   const lastSpreads = useRef(spreads);
@@ -88,6 +105,17 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
     return () => clearTimeout(t);
   }, [flip, commit]);
 
+  /** Let go of a dragged page: finish the turn, or let it fall back. */
+  const release = useCallback(
+    (ctl: CurlController, how: 'complete' | 'tap' | 'cancel', to: number) => {
+      const e = ctl.progress();
+      if (how === 'cancel') ctl.animateTo(0, 180 + 420 * e, () => setFlip(null), easeOut);
+      else if (how === 'tap') ctl.animateTo(1, CURL_MS * (1 - e * 0.5), () => commit(to), easeInOut);
+      else ctl.animateTo(1, 240 + 520 * (1 - e), () => commit(to), easeOut);
+    },
+    [commit],
+  );
+
   // Paper curl: snapshot the two faces of the turning leaf and hand them to WebGL.
   const latest = useRef(p);
   latest.current = p;
@@ -102,8 +130,11 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
     const pageEl = (n: number | null) => (n ? book?.querySelector<HTMLElement>(`.book-page[data-pg="${n}"] .page`) : null);
     const frontEl = pageEl(frontNum);
     // No WebGL, or the page hasn't rendered yet: fall back to the rigid 3D flip.
-    const fail = (_why: string) => setFlip({ ...flip, mode: 'rigid' });
-    if (!book || !canvas || !frontEl || !frontNum) return fail('dom');
+    const fail = () => {
+      dragRef.current = null;
+      setFlip({ dir: flip.dir, to: flip.to, mode: 'rigid' });
+    };
+    if (!book || !canvas || !frontEl || !frontNum) return fail();
 
     const { highlightsByPage, rotOf, pageFilter } = latest.current;
     const css = getComputedStyle(document.documentElement);
@@ -112,28 +143,44 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
     const front = snapshotPage(frontEl, rotOf(frontNum), rectsOf(frontNum), pageFilter);
     const backEl = pageEl(backNum);
     const back = backEl && backNum ? snapshotPage(backEl, rotOf(backNum), rectsOf(backNum), pageFilter) : null;
-    if (!front) return fail('snapshot'); // a missing back face just shows blank paper
+    if (!front) return fail(); // a missing back face just shows blank paper
 
     const bookRect = book.getBoundingClientRect();
     const canvasRect = canvas.getBoundingClientRect();
     const fr = frontEl.getBoundingClientRect();
-    const spineX = bookRect.left + bookRect.width / 2 - canvasRect.left;
-    const job = startCurl({
+    const ctl = createCurl({
       canvas,
       front,
       back,
       pageW: frontEl.offsetWidth,
       pageH: frontEl.offsetHeight,
-      originX: spineX,
+      originX: bookRect.left + bookRect.width / 2 - canvasRect.left,
       originY: fr.top - canvasRect.top,
       side: flip.dir,
-      duration: CURL_MS,
       paper: pageFilter === 'night' ? [0.11, 0.11, 0.11] : [0.985, 0.98, 0.965],
-      onDone: () => commit(flip.to),
     });
-    if (!job) return fail('webgl');
-    return () => job.cancel();
-  }, [flip, idx, spreads, commit]);
+    if (!ctl) return fail();
+    curlRef.current = ctl;
+
+    const drag = dragRef.current;
+    if (flip.manual && drag) {
+      ctl.setTilt(drag.tilt);
+      if (drag.release) {
+        // the pointer was already released before the curl was ready
+        ctl.set(drag.e * 0.5);
+        release(ctl, drag.release, flip.to);
+        dragRef.current = null;
+      } else {
+        ctl.follow(drag.e);
+      }
+    } else {
+      ctl.animateTo(1, CURL_MS, () => commit(flip.to));
+    }
+    return () => {
+      curlRef.current = null;
+      ctl.cancel();
+    };
+  }, [flip, idx, spreads, commit, release]);
 
   // Chain a queued turn (pressing → twice quickly turns twice).
   useEffect(() => {
@@ -179,6 +226,63 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
     }),
     [],
   );
+
+  /* ---------------------- Drag a page edge to turn ---------------------- */
+  const onEdgeDown = (dir: 1 | -1) => (ev: React.PointerEvent) => {
+    if (ev.button !== 0 || flip) return;
+    ev.preventDefault();
+    const to = idx + dir;
+    if (to < 0 || to >= spreads.length) return;
+    if (!animate) return setIdx(to);
+    const book = bookRef.current;
+    const pageNum = dir === 1 ? spreads[idx][1] : spreads[idx][0];
+    const el = pageNum ? book?.querySelector<HTMLElement>(`.book-page[data-pg="${pageNum}"] .page`) : null;
+    if (!book || !el) return turn(dir);
+    const rect = book.getBoundingClientRect();
+    const spineX = rect.left + rect.width / 2;
+    const W = el.offsetWidth;
+    const H = el.offsetHeight;
+    const at = (x: number) => progressAtPointer(dir === 1 ? x - spineX : spineX - x, W, H);
+    const drag: Drag = {
+      dir,
+      x0: ev.clientX,
+      t0: performance.now(),
+      moved: false,
+      e: at(ev.clientX),
+      tilt: ev.clientY < rect.top + rect.height / 2 ? -1 : 1,
+      spineX,
+      W,
+      H,
+      release: null,
+    };
+    dragRef.current = drag;
+    setFlip({ dir, to, mode: 'curl', manual: true });
+
+    const move = (m: PointerEvent) => {
+      if (dragRef.current !== drag) return;
+      if (Math.abs(m.clientX - drag.x0) > 4) drag.moved = true;
+      drag.e = at(m.clientX);
+      curlRef.current?.follow(drag.e);
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      if (dragRef.current !== drag) return;
+      // A quick press without movement turns the page; a drag turns it if you pulled far enough.
+      const tap = !drag.moved && performance.now() - drag.t0 < 400;
+      const how = tap ? 'tap' : drag.e > 0.4 ? 'complete' : 'cancel';
+      if (curlRef.current) {
+        release(curlRef.current, how, to);
+        dragRef.current = null;
+      } else {
+        drag.release = how;
+      }
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  };
 
   /* ------------------------------ Zoom & pan ------------------------------ */
   // Keep the same spot centred when the zoom changes.
@@ -271,7 +375,7 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
         <div className="book-wrap">
           <div
             ref={bookRef}
-            className={'book' + (flip ? ` turning dir-${flip.dir === 1 ? 'fwd' : 'bwd'} mode-${flip.mode}` : '')}
+            className={'book' + (flip ? ` turning dir-${flip.dir === 1 ? 'fwd' : 'bwd'} mode-${flip.mode}` : '') + (flip?.manual ? ' dragging' : '')}
             style={{ width: slotW * 2, height: slotH, ['--turn-ms' as string]: TURN_MS + 'ms', ['--slot-w' as string]: slotW + 'px' }}
           >
             {pages.map(([pg, role]) => {
@@ -295,6 +399,7 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
                     activeId={p.activeId}
                     flashId={p.flashId}
                     search={p.search}
+                    bookmarked={p.bookmarks.includes(pg)}
                   />
                 </div>
               );
@@ -306,6 +411,8 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
                 <div className="turn-shadow land" style={{ left: flip.dir === 1 ? 0 : slotW }} />
               </>
             )}
+            {!flip && canNext && cur[1] && <div className="turn-edge next" aria-label="Turn the page" onPointerDown={onEdgeDown(1)} />}
+            {!flip && canPrev && cur[0] && <div className="turn-edge prev" aria-label="Turn back" onPointerDown={onEdgeDown(-1)} />}
             {curl && (
               <canvas
                 ref={curlCanvas}

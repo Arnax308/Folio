@@ -1,5 +1,5 @@
-import { EditorView, keymap } from '@codemirror/view';
-import { EditorSelection, Prec } from '@codemirror/state';
+import { Decoration, EditorView, keymap, WidgetType, type DecorationSet } from '@codemirror/view';
+import { EditorSelection, Prec, RangeSetBuilder, StateField, type EditorState } from '@codemirror/state';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 
@@ -169,3 +169,106 @@ export function markdownKeymap(onSave: () => void) {
     ]),
   );
 }
+
+/* ------------------------------ Images ------------------------------- */
+// Pasted pictures are stored in the document itself as a reference definition at the very end:
+//   ![image][img-ab12cd]   …   [img-ab12cd]: data:image/webp;base64,…
+// The body stays readable and the file stays self-contained. In the editor the long data is
+// collapsed into a small chip.
+
+class ImageChip extends WidgetType {
+  constructor(readonly kb: number) {
+    super();
+  }
+  eq(other: ImageChip) {
+    return other.kb === this.kb;
+  }
+  toDOM() {
+    const el = document.createElement('span');
+    el.className = 'cm-img-chip';
+    el.textContent = `image data · ${this.kb < 1024 ? this.kb + ' KB' : (this.kb / 1024).toFixed(1) + ' MB'}`;
+    return el;
+  }
+}
+
+const DATA_URL = /data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=]+/g;
+
+function buildChips(state: EditorState): DecorationSet {
+  const b = new RangeSetBuilder<Decoration>();
+  const text = state.doc.toString();
+  if (text.includes('data:image/')) {
+    for (const m of text.matchAll(DATA_URL)) {
+      const kb = Math.max(1, Math.round((m[0].length * 0.75) / 1024));
+      b.add(m.index, m.index + m[0].length, Decoration.replace({ widget: new ImageChip(kb) }));
+    }
+  }
+  return b.finish();
+}
+
+export const imageChips = StateField.define<DecorationSet>({
+  create: buildChips,
+  update: (value, tr) => (tr.docChanged ? buildChips(tr.state) : value),
+  provide: (f) => [EditorView.decorations.from(f), EditorView.atomicRanges.of((view) => view.state.field(f))],
+});
+
+/** Shrinks large pictures so a pasted screenshot doesn't bloat the document. */
+async function imageToDataUrl(file: File): Promise<string> {
+  const read = () =>
+    new Promise<string>((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result));
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(file);
+    });
+  if (file.type === 'image/gif' || file.type === 'image/svg+xml') return read();
+  const bmp = await createImageBitmap(file);
+  const s = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  if (s === 1 && file.size < 350_000 && /image\/(png|jpeg|webp)/.test(file.type)) return read();
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * s);
+  c.height = Math.round(bmp.height * s);
+  c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
+  return c.toDataURL('image/webp', 0.88);
+}
+
+export async function insertImageFile(view: EditorView, file: File) {
+  const url = await imageToDataUrl(file);
+  const id = 'img-' + Math.random().toString(36).slice(2, 8);
+  const { state } = view;
+  const sel = state.selection.main;
+  const end = state.doc.length;
+  const ref = `![${file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[[\]]/g, '') || 'image'}][${id}]`;
+  const tail = `${state.doc.sliceString(Math.max(0, end - 1)) === '\n' ? '' : '\n'}\n[${id}]: ${url}\n`;
+  view.dispatch({
+    changes: [
+      { from: sel.from, to: sel.to, insert: ref },
+      { from: end, insert: tail },
+    ],
+    selection: { anchor: sel.from + ref.length },
+    scrollIntoView: true,
+    userEvent: 'input.paste',
+  });
+  view.focus();
+}
+
+const imageIn = (list?: FileList | null) => Array.from(list ?? []).find((f) => f.type.startsWith('image/'));
+
+/** Paste or drop a picture into the editor. */
+export const imagePaste = EditorView.domEventHandlers({
+  paste(e, view) {
+    const f = imageIn(e.clipboardData?.files);
+    if (!f) return false;
+    e.preventDefault();
+    insertImageFile(view, f);
+    return true;
+  },
+  drop(e, view) {
+    const f = imageIn(e.dataTransfer?.files);
+    if (!f) return false;
+    e.preventDefault();
+    const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+    if (pos !== null) view.dispatch({ selection: { anchor: pos } });
+    insertImageFile(view, f);
+    return true;
+  },
+});
