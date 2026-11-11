@@ -238,13 +238,18 @@ export async function insertImageFile(view: EditorView, file: File) {
   const sel = state.selection.main;
   const end = state.doc.length;
   const ref = `![${file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[[\]]/g, '') || 'image'}][${id}]`;
+  // a picture gets a paragraph of its own, even when pasted mid-sentence
+  const line = state.doc.lineAt(sel.from);
+  const before = state.sliceDoc(line.from, sel.from).trim() ? '\n\n' : '';
+  const after = state.sliceDoc(sel.to, state.doc.lineAt(sel.to).to).trim() ? '\n\n' : '';
+  const insert = before + ref + after;
   const tail = `${state.doc.sliceString(Math.max(0, end - 1)) === '\n' ? '' : '\n'}\n[${id}]: ${url}\n`;
   view.dispatch({
     changes: [
-      { from: sel.from, to: sel.to, insert: ref },
+      { from: sel.from, to: sel.to, insert },
       { from: end, insert: tail },
     ],
-    selection: { anchor: sel.from + ref.length },
+    selection: { anchor: sel.from + before.length + ref.length },
     scrollIntoView: true,
     userEvent: 'input.paste',
   });

@@ -100,6 +100,31 @@ fn save_as(app: AppHandle, window: WebviewWindow, request: Request<'_>) -> Resul
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+/// Shrinks the window to fit the screen it opens on (minus the taskbar), centres it, then shows it.
+/// The configured 1360×880 is too tall for a 1080p screen at 125% scaling, for example.
+fn fit_to_screen(window: &WebviewWindow) {
+    let fit = || -> tauri::Result<()> {
+        let Some(monitor) = window.current_monitor()?.or(window.primary_monitor()?) else {
+            return Ok(());
+        };
+        let area = monitor.work_area();
+        let size = window.outer_size()?;
+        let max_w = (area.size.width as f64 * 0.96) as u32;
+        let max_h = (area.size.height as f64 * 0.94) as u32;
+        let w = size.width.min(max_w);
+        let h = size.height.min(max_h);
+        if w != size.width || h != size.height {
+            window.set_size(tauri::PhysicalSize::new(w, h))?;
+        }
+        let x = area.position.x + (area.size.width as i32 - w as i32) / 2;
+        let y = area.position.y + (area.size.height as i32 - h as i32) / 2;
+        window.set_position(tauri::PhysicalPosition::new(x, y))?;
+        Ok(())
+    };
+    let _ = fit();
+    let _ = window.show(); // always show, even if measuring the screen failed
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -120,6 +145,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Pending(Mutex::new(files_from_args(std::env::args(), None))))
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                fit_to_screen(&window);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![take_pending, read_file, write_text_file, save_as])
         .run(tauri::generate_context!())
         .expect("error while running Folio");

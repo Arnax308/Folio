@@ -148,7 +148,8 @@ export function renderMarkdown(src: string): { html: string; toc: TocItem[] } {
 
 export function wordCount(src: string) {
   const text = src
-    .replace(/data:image\/[^\s)]+/g, ' ') // embedded pictures aren't words
+    .replace(/^\[(?!\^)[^\]\n]+\]:\s.*$/gm, ' ') // link / picture definitions (footnotes are real text)
+    .replace(/!\[[^\]\n]*\](\[[^\]\n]*\]|\([^)\n]*\))/g, ' ') // pictures aren't words
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/[#>*_`~\-[\]()!|]/g, ' ');
   const m = text.match(/[\p{L}\p{N}']+/gu);

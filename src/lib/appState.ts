@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
+import { isDesktop } from './desktop';
 
 /* ------------------------- Current document title ------------------------- */
 let docTitle: string | null = null;
@@ -6,7 +7,10 @@ const titleListeners = new Set<() => void>();
 
 function setDocTitle(name: string | null) {
   docTitle = name;
-  document.title = name ? `${name} — Folio` : 'Folio';
+  const title = name ? `${name} — Folio` : 'Folio';
+  document.title = title;
+  // desktop: also name the native window, which is what the taskbar and Alt+Tab show
+  if (isDesktop) import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().setTitle(title)).catch(() => {});
   titleListeners.forEach((l) => l());
 }
 

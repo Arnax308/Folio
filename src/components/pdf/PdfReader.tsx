@@ -585,7 +585,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     (q: string): PaletteItem[] => {
       const group = 'This PDF';
       const items: PaletteItem[] = [];
-      const n = Number(q.trim().replace(/^(p|pg|page)\.?\s*/i, ''));
+      const n = Number(q.trim().replace(/^(page|pg|p)\.?\s*/i, ''));
       if (q.trim() && Number.isInteger(n) && n >= 1 && n <= pageTotal) {
         items.push({ id: 'pdf-goto', title: `Go to page ${n}`, group, pinned: true, run: () => goTo(n) });
       }
