@@ -1,4 +1,4 @@
-import { isDesktop } from '../../lib/desktop';
+import { isTauri } from '../../lib/desktop';
 import { download, toast } from './ui';
 
 export const LIBRARY_CHANGED = 'folio:library-changed';
@@ -9,7 +9,7 @@ export async function backupLibrary() {
     const { blob, count } = await exportLibrary();
     if (!count) return toast('Nothing to back up yet');
     download(backupName(), blob, 'application/zip');
-    if (!isDesktop) toast(`Backed up ${count} document${count === 1 ? '' : 's'}`);
+    if (!isTauri) toast(`Backed up ${count} document${count === 1 ? '' : 's'}`);
   } catch (e) {
     console.warn(e);
     toast('The backup could not be created');

@@ -3,12 +3,13 @@ import {
   Archive, ArchiveRestore, BookOpen, CornerDownLeft, FileText, Hash, Library, Moon, PenLine, Search, Sparkles, Sun, Coffee, Upload,
 } from 'lucide-react';
 import type { Route } from '../../App';
-import { collectPaletteItems, type PaletteItem } from '../../lib/appState';
+import { collectPaletteItems, OPEN_PALETTE, type PaletteItem } from '../../lib/appState';
 import { listDocs, patchDoc } from '../../lib/db';
 import { createMarkdown, importFiles } from '../../lib/importer';
 import { updateSettings, useSettings } from '../../lib/settings';
 import type { DocMeta } from '../../lib/types';
 import { backupLibrary, restoreLibrary } from './actions';
+import { fileAccept } from '../../lib/desktop';
 import { toast } from './ui';
 
 function score(item: PaletteItem, tokens: string[]) {
@@ -47,8 +48,13 @@ export function CommandPalette({ go, route }: { go: (r: Route) => void; route: R
         setOpen((o) => !o);
       }
     };
+    const onOpen = () => setOpen(true);
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener(OPEN_PALETTE, onOpen);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener(OPEN_PALETTE, onOpen);
+    };
   }, []);
 
   useEffect(() => {
@@ -157,7 +163,7 @@ export function CommandPalette({ go, route }: { go: (r: Route) => void; route: R
         type="file"
         hidden
         multiple
-        accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown"
+        accept={fileAccept('docs')}
         onChange={async (e) => {
           const files = Array.from(e.target.files ?? []);
           e.target.value = '';
@@ -171,7 +177,7 @@ export function CommandPalette({ go, route }: { go: (r: Route) => void; route: R
         ref={backupInput}
         type="file"
         hidden
-        accept=".zip,application/zip"
+        accept={fileAccept('backup')}
         onChange={(e) => {
           const f = e.target.files?.[0];
           e.target.value = '';

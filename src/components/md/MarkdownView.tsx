@@ -1,7 +1,7 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useMemo, useRef } from 'react';
 import { fillCachedMermaid, renderMarkdown, renderMermaidIn, type TocItem } from '../../lib/markdown';
 import { useSettings } from '../../lib/settings';
-import { isDesktop, openExternal } from '../../lib/desktop';
+import { isTauri, openExternal } from '../../lib/desktop';
 
 interface Props {
   source: string;
@@ -52,7 +52,7 @@ export const MarkdownView = forwardRef<HTMLDivElement | null, Props>(function Ma
       return;
     }
     const ext = t.closest<HTMLAnchorElement>('a[href^="http"]');
-    if (ext && isDesktop) {
+    if (ext && isTauri) {
       e.preventDefault();
       openExternal(ext.href);
       return;

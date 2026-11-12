@@ -10,6 +10,7 @@ import './styles/library.css';
 import './styles/reader.css';
 import './styles/markdown.css';
 import './styles/extras.css';
+import './styles/touch.css';
 import App from './App';
 
 createRoot(document.getElementById('root')!).render(

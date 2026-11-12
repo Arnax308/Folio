@@ -17,6 +17,27 @@ The desktop build needs Rust (`rustup`, MSVC toolchain) and the Visual Studio C+
 
 Run the new installer over an older version to update; the library is kept. Never change the identifier `app.folio.reader` in `tauri.conf.json` — the library is stored under it.
 
+### Android tablet
+
+```bash
+npm run android:build      # signed release APK → Folio-<version>-android.apk in the project folder
+```
+
+Needs JDK 17, the Android SDK + NDK 27 and Rust's Android targets (`scripts/android-env.sh` points at them). The script works around Tauri's symlink step, which Windows only allows in Developer Mode. Copy the APK to the tablet and open it (allow "install unknown apps" for your file manager once), or with USB debugging on: `adb install -r Folio-<version>-android.apk`.
+
+The APK is signed with `src-tauri/gen/android/folio-release.jks` (password in `keystore.properties` next to it). Both are git-ignored — **back them up**: Android only installs an update over the existing app if it's signed with the same key; otherwise you'd have to uninstall, which deletes the library on the tablet.
+
+## Touch interface
+
+On the Android app (and touch-only devices) Folio switches to a touch-first layout; the desktop keeps the mouse layout. Override it under **Aa → Interface** (Auto / Touch / Mouse).
+
+- 44 px+ controls, no hover-only buttons, a **Go to…** / search button for the command palette
+- Tap the page to hide the toolbar for distraction-free reading (the page number floats at the bottom)
+- Pinch to zoom; in two-page view, swipe across the book to turn pages (the curl follows your finger; flick to turn)
+- Long-press to select text — the highlight colours appear under the selection, clear of Android's own menu
+- Contents, thumbnails and notes slide in as drawers over the page; tapping outside closes them
+- Portrait: the library sidebar folds into a top bar with filters and a menu (theme, backup, restore)
+
 ## Features
 
 **Everywhere** — `Ctrl K` (or `Ctrl P`) opens a command palette: jump to any document, page (`page 12`), bookmark or heading, switch themes and layouts, back up or restore.

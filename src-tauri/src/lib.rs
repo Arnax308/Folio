@@ -3,7 +3,9 @@ use std::sync::Mutex;
 
 use percent_encoding::percent_decode_str;
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri::{AppHandle, Manager, WebviewWindow};
+#[cfg(desktop)]
+use tauri::Emitter;
 use tauri_plugin_dialog::DialogExt;
 
 /// Files Folio has been asked to open (Explorer double-click / "Open with") and not yet shown.
@@ -85,9 +87,15 @@ fn save_as(app: AppHandle, window: WebviewWindow, request: Request<'_>) -> Resul
     let ext = header("x-ext");
     let label = header("x-label");
 
-    let mut dialog = app.dialog().file().set_parent(&window);
+    let mut dialog = app.dialog().file();
+    #[cfg(desktop)]
+    {
+        dialog = dialog.set_parent(&window);
+    }
+    #[cfg(mobile)]
+    let _ = &window;
     if !name.is_empty() {
-        dialog = dialog.set_file_name(name);
+        dialog = dialog.set_file_name(name.clone());
     }
     if !ext.is_empty() {
         dialog = dialog.add_filter(if label.is_empty() { "File".to_string() } else { label }, &[ext.as_str()]);
@@ -95,13 +103,30 @@ fn save_as(app: AppHandle, window: WebviewWindow, request: Request<'_>) -> Resul
     let Some(target) = dialog.blocking_save_file() else {
         return Ok(None); // cancelled
     };
-    let path = target.into_path().map_err(|e| e.to_string())?;
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    Ok(Some(path.to_string_lossy().into_owned()))
+
+    #[cfg(desktop)]
+    {
+        let path = target.into_path().map_err(|e| e.to_string())?;
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }
+    #[cfg(mobile)]
+    {
+        // Android hands back a content:// location; the fs plugin opens it through Android's APIs.
+        use std::io::Write;
+        use tauri_plugin_fs::{FsExt, OpenOptions};
+        let mut opts = OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        let mut file = app.fs().open(target, opts).map_err(|e| e.to_string())?;
+        file.write_all(bytes).map_err(|e| e.to_string())?;
+        // the location is an opaque URI, so report the name the user saw
+        Ok(Some(if name.is_empty() { "file".into() } else { name }))
+    }
 }
 
 /// Shrinks the window to fit the screen it opens on (minus the taskbar), centres it, then shows it.
 /// The configured 1360×880 is too tall for a 1080p screen at 125% scaling, for example.
+#[cfg(desktop)]
 fn fit_to_screen(window: &WebviewWindow) {
     let fit = || -> tauri::Result<()> {
         let Some(monitor) = window.current_monitor()?.or(window.primary_monitor()?) else {
@@ -127,27 +152,37 @@ fn fit_to_screen(window: &WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        // Must be registered first: a second launch hands its file to the running window and exits.
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
-            let files = files_from_args(argv, Some(Path::new(&cwd)));
-            if let Some(pending) = app.try_state::<Pending>() {
-                if let Ok(mut list) = pending.0.lock() {
-                    list.extend(files);
-                }
+    let builder = tauri::Builder::default();
+
+    // Desktop: must be registered first — a second launch hands its file to the running window and exits.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        let files = files_from_args(argv, Some(Path::new(&cwd)));
+        if let Some(pending) = app.try_state::<Pending>() {
+            if let Ok(mut list) = pending.0.lock() {
+                list.extend(files);
             }
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-            let _ = app.emit("folio-open", ());
-        }))
+        }
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+        let _ = app.emit("folio-open", ());
+    }));
+
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_fs::init());
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Pending(Mutex::new(files_from_args(std::env::args(), None))))
-        .setup(|app| {
-            if let Some(window) = app.get_webview_window("main") {
+        .setup(|_app| {
+            if let Some(window) = _app.get_webview_window("main") {
+                #[cfg(desktop)]
                 fit_to_screen(&window);
+                #[cfg(mobile)]
+                let _ = window.show(); // the shared config starts the window hidden
             }
             Ok(())
         })

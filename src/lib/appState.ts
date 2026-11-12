@@ -33,6 +33,10 @@ export function useCurrentDocTitle() {
 }
 
 /* ----------------------------- Command palette ---------------------------- */
+export const OPEN_PALETTE = 'folio:open-palette';
+/** Opens the command palette (the touch interface has a button for it; there's no Ctrl+K on a tablet). */
+export const openPalette = () => window.dispatchEvent(new Event(OPEN_PALETTE));
+
 export interface PaletteItem {
   id: string;
   title: string;

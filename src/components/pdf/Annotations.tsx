@@ -10,16 +10,19 @@ export function SelectionToolbar({
   onNote,
   onCopy,
   lastColor,
+  below = false,
 }: {
+  /** Touch: Android's own Copy / Share menu sits above a selection, so ours goes underneath. */
+  below?: boolean;
   rect: DOMRect;
   onColor: (c: HighlightColor) => void;
   onNote: () => void;
   onCopy: () => void;
   lastColor: HighlightColor;
 }) {
-  const above = rect.top > 90;
+  const above = below ? rect.bottom > window.innerHeight - 110 : rect.top > 90;
   const left = Math.min(Math.max(rect.left + rect.width / 2, 170), window.innerWidth - 170);
-  const top = above ? rect.top - 10 : rect.bottom + 10;
+  const top = above ? rect.top - 10 : rect.bottom + (below ? 30 : 10); // room for the selection handles
   return (
     <div
       className={'sel-toolbar' + (above ? '' : ' below')}

@@ -1,0 +1,563 @@
+/* ================================================================== */
+/*  Touch interface (tablets / Android).                               */
+/*  Everything is scoped to :root[data-ui='touch'] so the mouse        */
+/*  interface on the desktop is unchanged.                             */
+/* ================================================================== */
+
+:root[data-ui='touch'] {
+  --bar-h: 60px;
+  --tap: 44px; /* minimum touch target */
+  -webkit-tap-highlight-color: transparent;
+}
+:root[data-ui='touch'] body {
+  overscroll-behavior: none;
+}
+
+/* ----------------------------- Feedback ------------------------------ */
+/* No hover on touch: tooltips would stick after a tap, so they go; pressed states carry the feedback. */
+:root[data-ui='touch'] [data-tip]::after {
+  display: none;
+}
+:root[data-ui='touch'] :is(button, .card-hit, a, .note-card) {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+:root[data-ui='touch'] :is(.icon-btn, .btn, .nav-item, .menu-item, .chip, .bm-chip, .pal-item):active {
+  transform: scale(0.95);
+  transition-duration: 0.06s;
+}
+:root[data-ui='touch'] ::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+/* ----------------------------- Controls ------------------------------ */
+:root[data-ui='touch'] .icon-btn {
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: 12px;
+}
+:root[data-ui='touch'] .icon-btn svg {
+  width: 20px;
+  height: 20px;
+}
+:root[data-ui='touch'] .icon-btn.sm {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+:root[data-ui='touch'] .icon-btn.sm svg {
+  width: 16px;
+  height: 16px;
+}
+:root[data-ui='touch'] .btn {
+  height: var(--tap);
+  padding: 0 18px;
+  border-radius: 13px;
+  font-size: 15px;
+}
+:root[data-ui='touch'] .segmented {
+  padding: 4px;
+  border-radius: 13px;
+}
+:root[data-ui='touch'] .segmented button {
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+:root[data-ui='touch'] .menu-item {
+  height: 48px;
+  padding: 0 14px;
+  gap: 14px;
+  border-radius: 11px;
+  font-size: 15px;
+}
+:root[data-ui='touch'] .menu-label {
+  padding: 12px 14px 6px;
+}
+:root[data-ui='touch'] .popover {
+  min-width: 260px;
+  padding: 8px;
+  border-radius: 18px;
+}
+:root[data-ui='touch'] .switch-row {
+  padding: 10px 14px;
+}
+:root[data-ui='touch'] .switch {
+  width: 46px;
+  height: 28px;
+  border-radius: 14px;
+}
+:root[data-ui='touch'] .switch-knob {
+  width: 24px;
+  height: 24px;
+}
+:root[data-ui='touch'] .switch.on .switch-knob {
+  transform: translateX(18px);
+}
+:root[data-ui='touch'] .theme-dot {
+  width: 40px;
+  height: 40px;
+}
+:root[data-ui='touch'] .slider input {
+  height: 6px;
+}
+:root[data-ui='touch'] .slider input::-webkit-slider-thumb {
+  width: 26px;
+  height: 26px;
+}
+:root[data-ui='touch'] .kbd {
+  display: none; /* keyboard hints don't apply */
+}
+:root[data-ui='touch'] .toasts {
+  bottom: max(28px, env(safe-area-inset-bottom));
+}
+:root[data-ui='touch'] .toast {
+  padding: 13px 20px 13px 16px;
+  font-size: 14.5px;
+}
+
+/* Things that only appeared on hover are always visible on touch */
+:root[data-ui='touch'] :is(.card-menu, .thumb-bm, .thumb-foot .icon-btn, .note-del, .note-add, .code-copy) {
+  opacity: 1 !important;
+}
+
+/* ------------------------------ Library ------------------------------ */
+:root[data-ui='touch'] .lib {
+  grid-template-columns: 288px 1fr;
+}
+:root[data-ui='touch'] .lib-side {
+  padding: max(22px, env(safe-area-inset-top)) 16px 20px;
+}
+:root[data-ui='touch'] .brand {
+  font-size: 25px;
+  padding-bottom: 26px;
+}
+:root[data-ui='touch'] .nav-item {
+  height: 48px;
+  padding: 0 14px;
+  font-size: 15px;
+  border-radius: 12px;
+}
+:root[data-ui='touch'] .side-card {
+  padding: 16px;
+  border-radius: 18px;
+}
+:root[data-ui='touch'] .backup-btn {
+  height: 42px;
+  font-size: 14px;
+  border-radius: 12px;
+}
+:root[data-ui='touch'] .lib-inner {
+  padding: max(36px, env(safe-area-inset-top)) 40px 80px;
+}
+:root[data-ui='touch'] .lib-title {
+  font-size: 52px;
+}
+:root[data-ui='touch'] .search-field {
+  height: var(--tap);
+  width: 260px;
+  border-radius: 13px;
+  font-size: 15px;
+}
+:root[data-ui='touch'] .search-field input {
+  font-size: 15px;
+}
+:root[data-ui='touch'] .search-field:focus-within {
+  width: 300px;
+}
+:root[data-ui='touch'] .grid {
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 34px 26px;
+}
+:root[data-ui='touch'] .card-title {
+  font-size: 15px;
+}
+:root[data-ui='touch'] .card-meta {
+  font-size: 13px;
+}
+:root[data-ui='touch'] .card-menu > .icon-btn {
+  width: 38px;
+  height: 38px;
+}
+:root[data-ui='touch'] .resume {
+  padding: 24px 26px 24px 24px;
+}
+:root[data-ui='touch'] .resume-cta {
+  height: var(--tap);
+  padding: 0 20px;
+  border-radius: 13px;
+  font-size: 15px;
+}
+:root[data-ui='touch'] .rename-input {
+  font-size: 15px;
+  padding: 6px 8px;
+}
+
+/* Narrow (portrait tablet / small window): the sidebar folds into a top bar.
+   Touch folds it below 1000px, the mouse interface below 860px (library.css hides the sidebar there). */
+.lib-topbar {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 26px;
+}
+.lib-topbar .brand {
+  padding: 0;
+  margin-right: auto;
+}
+.lib-topbar .segmented button {
+  gap: 7px;
+}
+@media (max-width: 1000px) {
+  :root[data-ui='touch'] .lib {
+    grid-template-columns: 1fr;
+  }
+  :root[data-ui='touch'] .lib-side {
+    display: none;
+  }
+  :root[data-ui='touch'] .lib-topbar {
+    display: flex;
+  }
+  :root[data-ui='touch'] .lib-head {
+    margin-bottom: 26px;
+  }
+  :root[data-ui='touch'] .lib-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  :root[data-ui='touch'] .lib-actions .search-field {
+    flex: 1;
+    min-width: 200px;
+  }
+  :root[data-ui='touch'] .lib-actions .search-field:focus-within {
+    width: auto;
+  }
+}
+@media (max-width: 860px) {
+  :root[data-ui='mouse'] .lib-topbar {
+    display: flex;
+  }
+}
+@media (max-width: 860px) {
+  .lib-inner {
+    padding: 28px 22px 60px;
+  }
+  .lib-title {
+    font-size: 40px !important;
+  }
+}
+
+/* --------------------------- Reader chrome --------------------------- */
+:root[data-ui='touch'] .reader-bar {
+  padding: 0 max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left));
+  gap: 10px;
+  transition: transform 0.32s var(--ease), opacity 0.25s var(--ease);
+}
+:root[data-ui='touch'] .bar-left,
+:root[data-ui='touch'] .bar-right {
+  gap: 4px;
+}
+:root[data-ui='touch'] .doc-title {
+  font-size: 15px;
+}
+:root[data-ui='touch'] .page-pill {
+  height: var(--tap);
+  border-radius: 13px;
+  padding: 0 4px;
+  font-size: 15px;
+}
+:root[data-ui='touch'] .page-pill input {
+  height: 34px;
+  font-size: 15px;
+}
+:root[data-ui='touch'] .zoom-btn {
+  height: var(--tap);
+  min-width: 64px;
+}
+:root[data-ui='touch'] .zoom-label {
+  font-size: 14px;
+}
+:root[data-ui='touch'] .edit-btn {
+  height: var(--tap);
+}
+:root[data-ui='touch'] .btn-badge {
+  top: 4px;
+  right: 3px;
+  min-width: 18px;
+  height: 18px;
+  line-height: 18px;
+  font-size: 10.5px;
+}
+
+/* Immersive reading: tap the page to hide the toolbar */
+.reader.chrome-hidden .reader-bar {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+}
+.float-page {
+  position: absolute;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 25;
+  padding: 7px 14px;
+  border-radius: 20px;
+  background: var(--glass);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-sm);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  transform: translateX(-50%);
+  pointer-events: none;
+  animation: fade-in 0.3s var(--ease);
+}
+.float-page span {
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+/* Side panels slide over the page as drawers instead of squeezing it */
+:root[data-ui='touch'] .side-panel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 26;
+  box-shadow: var(--shadow-lg);
+}
+:root[data-ui='touch'] .side-panel.left {
+  left: 0;
+  width: min(320px, 82vw);
+}
+:root[data-ui='touch'] .side-panel.right {
+  right: 0;
+  width: min(380px, 88vw);
+}
+.drawer-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 24;
+  background: color-mix(in srgb, var(--bg-sunk) 45%, transparent);
+  backdrop-filter: blur(2px);
+  animation: fade 0.22s var(--ease);
+}
+
+/* Sidebar content */
+:root[data-ui='touch'] .panel-tabs .segmented button {
+  height: 40px;
+  font-size: 13.5px;
+}
+:root[data-ui='touch'] .thumbs {
+  gap: 20px;
+}
+:root[data-ui='touch'] .thumb {
+  width: 150px;
+}
+:root[data-ui='touch'] .thumb-bm {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+:root[data-ui='touch'] .outline-title {
+  padding: 11px 10px 11px 6px;
+  font-size: 14.5px;
+}
+:root[data-ui='touch'] .outline-chev {
+  width: 32px;
+  height: 32px;
+}
+:root[data-ui='touch'] .search-hit-row {
+  padding: 12px;
+}
+:root[data-ui='touch'] .search-snippet {
+  font-size: 14px;
+}
+:root[data-ui='touch'] .bm-chip {
+  height: 36px;
+  min-width: 44px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+/* Notes */
+:root[data-ui='touch'] .notes-list {
+  gap: 12px;
+}
+:root[data-ui='touch'] .note-card {
+  padding: 16px 16px 16px 20px;
+}
+:root[data-ui='touch'] .note-quote {
+  font-size: 16px;
+}
+:root[data-ui='touch'] .note-text,
+:root[data-ui='touch'] .note-edit {
+  font-size: 15px;
+}
+:root[data-ui='touch'] .note-add {
+  font-size: 14px;
+  padding: 6px 0;
+}
+:root[data-ui='touch'] .chip {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 18px;
+  font-size: 13.5px;
+}
+:root[data-ui='touch'] .swatch.xs {
+  width: 24px;
+  height: 24px;
+}
+:root[data-ui='touch'] .chip-dots {
+  gap: 10px;
+}
+
+/* Selection toolbar + highlight card */
+:root[data-ui='touch'] .sel-toolbar {
+  gap: 8px;
+  padding: 8px 8px 8px 12px;
+  border-radius: 18px;
+}
+:root[data-ui='touch'] .swatch {
+  width: 32px;
+  height: 32px;
+}
+:root[data-ui='touch'] .swatch.sm {
+  width: 30px;
+  height: 30px;
+}
+:root[data-ui='touch'] .sel-btn {
+  height: 40px;
+  padding: 0 14px;
+  font-size: 15px;
+  border-radius: 12px;
+}
+:root[data-ui='touch'] .hl-popover {
+  width: min(380px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border-radius: 20px;
+}
+:root[data-ui='touch'] .hl-pop-swatches {
+  gap: 12px;
+}
+:root[data-ui='touch'] .hl-pop-quote {
+  font-size: 16.5px;
+}
+:root[data-ui='touch'] .hl-pop-note {
+  font-size: 16px; /* 16px+ keeps Android from zooming into the field */
+  min-height: 84px;
+}
+
+/* -------------------------------- PDF -------------------------------- */
+:root[data-ui='touch'] .scroller {
+  -webkit-overflow-scrolling: touch;
+}
+:root[data-ui='touch'] .pages {
+  padding: calc(var(--bar-h) + 16px) 16px 120px;
+  gap: 16px;
+}
+:root[data-ui='touch'] .pages.pinching,
+:root[data-ui='touch'] .book-wrap.pinching {
+  transition: none;
+  will-change: transform;
+}
+:root[data-ui='touch'] .spread-nav {
+  width: 52px;
+  height: 52px;
+  opacity: 0.75;
+}
+:root[data-ui='touch'] .turn-edge {
+  width: 56px;
+}
+:root[data-ui='touch'] .turn-edge::after {
+  opacity: 0.35;
+}
+:root[data-ui='touch'] .book-wrap {
+  padding: 18px 80px 48px;
+}
+:root[data-ui='touch'] .spread-pos {
+  font-size: 13.5px;
+}
+/* swiping across the book turns pages; vertical pans and pinches stay ours */
+:root[data-ui='touch'] .spread-stage.at-fit .book {
+  touch-action: none;
+}
+
+/* ----------------------------- Markdown ------------------------------ */
+:root[data-ui='touch'] .md-page {
+  padding-left: 32px;
+  padding-right: 32px;
+}
+:root[data-ui='touch'] .toc-item {
+  padding: 11px 12px;
+  font-size: 15px;
+}
+:root[data-ui='touch'] .toc-item.l1 {
+  padding-left: 26px;
+}
+:root[data-ui='touch'] .toc-item.l2 {
+  padding-left: 40px;
+  font-size: 14px;
+}
+:root[data-ui='touch'] .code-copy {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+:root[data-ui='touch'] .prose .footnote-ref a {
+  padding: 4px; /* easier to hit */
+}
+
+/* Editor */
+:root[data-ui='touch'] .format-bar {
+  padding: 5px;
+  border-radius: 16px;
+}
+:root[data-ui='touch'] .format-bar .fb {
+  width: 42px;
+  height: 42px;
+}
+:root[data-ui='touch'] .cm-host .cm-editor {
+  font-size: 16px;
+}
+:root[data-ui='touch'] .status-bar {
+  height: 36px;
+  font-size: 13px;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+:root[data-ui='touch'] .doc-title-input {
+  font-size: 15px;
+  padding: 8px 10px;
+}
+:root[data-ui='touch'] .save-state {
+  font-size: 13px;
+}
+
+/* --------------------------- Command palette ------------------------- */
+:root[data-ui='touch'] .pal-overlay {
+  padding-top: max(10vh, 40px);
+}
+:root[data-ui='touch'] .pal {
+  width: min(680px, calc(100vw - 32px));
+  border-radius: 22px;
+}
+:root[data-ui='touch'] .pal-input {
+  height: 64px;
+}
+:root[data-ui='touch'] .pal-input input {
+  font-size: 17px;
+}
+:root[data-ui='touch'] .pal-item {
+  height: 52px;
+  font-size: 15.5px;
+  border-radius: 12px;
+}
+:root[data-ui='touch'] .pal-list {
+  max-height: min(60vh, 560px);
+}
+:root[data-ui='touch'] .pal-foot {
+  display: none;
+}

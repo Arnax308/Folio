@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Archive, ArchiveRestore, BookOpen, Ellipsis, FileText, Hash, Library as LibraryIcon, PenLine, Plus, Search, Trash, Upload, ArrowUpRight, Pencil,
+  Archive, ArchiveRestore, BookOpen, Ellipsis, Menu, FileText, Hash, Library as LibraryIcon, PenLine, Plus, Search, Trash, Upload, ArrowUpRight, Pencil,
 } from 'lucide-react';
 import type { Route } from '../App';
 import type { DocMeta } from '../lib/types';
 import { deleteDoc, listDocs, patchDoc } from '../lib/db';
 import { createMarkdown, importFiles, seedIfFirstRun } from '../lib/importer';
-import { ThemePicker, timeAgo, toast, useDismiss } from './ui/ui';
+import { PopoverButton, ThemePicker, timeAgo, toast, useDismiss } from './ui/ui';
+import { openPalette } from '../lib/appState';
+import { updateSettings, useSettings, useTouchUI } from '../lib/settings';
 import { backupLibrary, LIBRARY_CHANGED, restoreLibrary } from './ui/actions';
+import { fileAccept } from '../lib/desktop';
 
 type Filter = 'all' | 'pdf' | 'md';
 
@@ -30,6 +33,8 @@ export default function Library({ go }: { go: (r: Route) => void }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const backupInput = useRef<HTMLInputElement>(null);
+  const touch = useTouchUI();
+  const { uiMode } = useSettings();
 
   const refresh = useCallback(async () => setDocs(await listDocs()), []);
   useEffect(() => {
@@ -166,7 +171,7 @@ export default function Library({ go }: { go: (r: Route) => void }) {
             ref={backupInput}
             type="file"
             hidden
-            accept=".zip,application/zip"
+            accept={fileAccept('backup')}
             onChange={(e) => {
               const f = e.target.files?.[0];
               e.target.value = '';
@@ -188,6 +193,53 @@ export default function Library({ go }: { go: (r: Route) => void }) {
 
       <main className="lib-main">
         <div className="lib-inner">
+          {/* shown instead of the sidebar on narrow screens (portrait tablet, small windows) */}
+          <div className="lib-topbar">
+            <div className="brand">
+              <Logo />
+              <span>Folio</span>
+            </div>
+            <div className="segmented" role="tablist" aria-label="Show">
+              <button className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>
+                <LibraryIcon size={15} /> All
+              </button>
+              <button className={filter === 'pdf' ? 'on' : ''} onClick={() => setFilter('pdf')}>
+                <FileText size={15} /> PDFs
+              </button>
+              <button className={filter === 'md' ? 'on' : ''} onClick={() => setFilter('md')}>
+                <Hash size={15} /> Markdown
+              </button>
+            </div>
+            <PopoverButton icon={<Menu size={18} />} tip="Menu" width={280}>
+              {(close) => (
+                <>
+                  <div className="menu-label">Appearance</div>
+                  <div style={{ padding: '6px 14px 12px' }}>
+                    <ThemePicker />
+                  </div>
+                  <div className="menu-label">Interface</div>
+                  <div style={{ padding: '4px 8px 8px' }}>
+                    <div className="segmented full">
+                      <button className={uiMode === 'auto' ? 'on' : ''} onClick={() => updateSettings({ uiMode: 'auto' })}>Auto</button>
+                      <button className={uiMode === 'touch' ? 'on' : ''} onClick={() => updateSettings({ uiMode: 'touch' })}>Touch</button>
+                      <button className={uiMode === 'mouse' ? 'on' : ''} onClick={() => updateSettings({ uiMode: 'mouse' })}>Mouse</button>
+                    </div>
+                  </div>
+                  <div className="menu-sep" />
+                  <button className="menu-item" onClick={() => (close(), backupLibrary())}>
+                    <Archive size={16} /> Back up library
+                  </button>
+                  <button className="menu-item" onClick={() => (close(), backupInput.current?.click())}>
+                    <ArchiveRestore size={16} /> Restore from a backup
+                  </button>
+                  <div className="menu-sep" />
+                  <div className="menu-label" style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}>
+                    Folio v{__APP_VERSION__} · everything stays on this device
+                  </div>
+                </>
+              )}
+            </PopoverButton>
+          </div>
           <header className="lib-head">
             <div>
               <div className="eyebrow">{today}</div>
@@ -199,6 +251,11 @@ export default function Library({ go }: { go: (r: Route) => void }) {
                 <input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search library" />
                 {!query && <span className="kbd">/</span>}
               </label>
+              {touch && (
+                <button className="btn btn-ghost" onClick={openPalette} aria-label="Search everything">
+                  <Search size={15} /> Go to…
+                </button>
+              )}
               <button className="btn btn-ghost" onClick={newNote}>
                 <PenLine size={15} /> New note
               </button>
@@ -210,7 +267,7 @@ export default function Library({ go }: { go: (r: Route) => void }) {
                 type="file"
                 hidden
                 multiple
-                accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown"
+                accept={fileAccept('docs')}
                 onChange={(e) => {
                   if (e.target.files) handleFiles(Array.from(e.target.files));
                   e.target.value = '';

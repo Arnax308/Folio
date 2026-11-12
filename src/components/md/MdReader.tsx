@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowLeft, Download, List, PenLine, StickyNote } from 'lucide-react';
+import { ArrowLeft, Download, List, PenLine, Search, StickyNote } from 'lucide-react';
 import type { Route } from '../../App';
 import { getDoc, getMarkdown, getMdState, patchDoc, saveMdState, uid } from '../../lib/db';
 import { wordCount, type TocItem } from '../../lib/markdown';
 import { CONTEXT, indexText, locate, rangeToOffsets, unwrapAll, wrapOffsets } from '../../lib/mdAnchor';
-import { useSettings } from '../../lib/settings';
-import { useDocTitle, usePaletteProvider, type PaletteItem } from '../../lib/appState';
+import { useSettings, useTouchUI } from '../../lib/settings';
+import { isInteractive } from '../../lib/gestures';
+import { openPalette, useDocTitle, usePaletteProvider, type PaletteItem } from '../../lib/appState';
 import type { Annotation, DocMeta, HighlightColor, MdHighlight } from '../../lib/types';
 import { createMarkdown } from '../../lib/importer';
 import { DisplayMenu } from '../ui/DisplayMenu';
@@ -22,8 +23,11 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
   const [meta, setMeta] = useState<DocMeta | null>(null);
   const [text, setText] = useState<string | null>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
-  const [tocOpen, setTocOpen] = useState(() => window.innerWidth > 1100);
+  const touch = useTouchUI();
+  // On touch the contents and notes are drawers over the text, so start with the text alone.
+  const [tocOpen, setTocOpen] = useState(() => window.innerWidth > 1100 && !touch);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [chromeHidden, setChromeHidden] = useState(false);
   const [activeId, setActiveId] = useState('');
   const [progress, setProgress] = useState(0);
   const [hls, setHls] = useState<MdHighlight[] | null>(null);
@@ -135,13 +139,27 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
   }, [clearSel]);
 
   useEffect(() => {
+    let t: ReturnType<typeof setTimeout>;
     const onChange = () => {
       const s = window.getSelection();
-      if (!s || s.isCollapsed) clearSel();
+      if (!s || s.isCollapsed) return clearSel();
+      // Touch: a long-press selection (and dragging its handles) only shows up here.
+      if (touch) {
+        clearTimeout(t);
+        t = setTimeout(checkSelection, 280);
+      }
     };
     document.addEventListener('selectionchange', onChange);
-    return () => document.removeEventListener('selectionchange', onChange);
-  }, [clearSel]);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener('selectionchange', onChange);
+    };
+  }, [clearSel, checkSelection, touch]);
+
+  // Opening a drawer brings the toolbar back.
+  useEffect(() => {
+    if (tocOpen || notesOpen) setChromeHidden(false);
+  }, [tocOpen, notesOpen]);
 
   const createHighlight = useCallback(
     (color: HighlightColor, withNote = false) => {
@@ -192,16 +210,19 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
     const s = window.getSelection();
     if (s && !s.isCollapsed) return;
     const m = (e.target as HTMLElement).closest<HTMLElement>(MARK);
-    if (m?.dataset.hl) setPop({ id: m.dataset.hl, x: e.clientX, y: e.clientY, focus: false });
+    if (m?.dataset.hl) return setPop({ id: m.dataset.hl, x: e.clientX, y: e.clientY, focus: false });
+    // Touch: tapping the text hides / shows the toolbar.
+    if (touch && !isInteractive(e.target) && !(e.target as HTMLElement).closest('.code-block, .table-wrap')) setChromeHidden((h) => !h);
   };
 
   const jumpTo = useCallback((h: MdHighlight) => {
+    if (touch) setNotesOpen(false);
     const m = article.current?.querySelector<HTMLElement>(`${MARK}[data-hl="${h.id}"]`);
     if (!m) return toast('That passage has changed since you highlighted it');
     m.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setFlash(h.id);
     setTimeout(() => setFlash((f) => (f === h.id ? null : f)), 1800);
-  }, []);
+  }, [touch]);
 
   /* ----------------------------- Keyboard ----------------------------- */
   useEffect(() => {
@@ -243,7 +264,7 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
   const popHl = pop && hls?.find((h) => h.id === pop.id);
 
   return (
-    <div className="reader md-reader">
+    <div className={'reader md-reader' + (chromeHidden ? ' chrome-hidden' : '')}>
       <header className="reader-bar">
         <div className="bar-left">
           <button className="icon-btn" data-tip="Library" aria-label="Back to library" onClick={() => go({ view: 'library' })}>
@@ -258,6 +279,11 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
           <span className="read-time">{minutes} min read</span>
         </div>
         <div className="bar-right">
+          {touch && (
+            <button className="icon-btn" aria-label="Search and go to" onClick={openPalette}>
+              <Search size={17} />
+            </button>
+          )}
           <button className="icon-btn" data-tip="Download .md" aria-label="Download" onClick={() => meta && text !== null && download(meta.name + '.md', text)}>
             <Download size={17} />
           </button>
@@ -288,6 +314,7 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
                   className={'toc-item l' + (t.level - minLevel) + (activeId === t.id ? ' on' : '')}
                   onClick={(e) => {
                     e.preventDefault();
+                    if (touch) setTocOpen(false);
                     article.current?.querySelector(`[id="${CSS.escape(t.id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                   }}
                 >
@@ -323,6 +350,15 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
             </div>
           )}
         </div>
+        {touch && (tocOpen || notesOpen) && (
+          <div
+            className="drawer-scrim"
+            onClick={() => {
+              setTocOpen(false);
+              setNotesOpen(false);
+            }}
+          />
+        )}
         {notesOpen && hls && (
           <NotesPanel
             highlights={hls}
@@ -346,6 +382,7 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
 
       {sel && (
         <SelectionToolbar
+          below={touch}
           rect={sel}
           lastColor={lastColor}
           onColor={(c) => createHighlight(c)}

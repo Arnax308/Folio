@@ -15,7 +15,7 @@ import type { DocMeta } from '../../lib/types';
 import {
   folioHighlight, folioTheme, imageChips, imagePaste, insertBlock, insertImageFile, insertLink, linePrefix, markdownKeymap, SNIPPETS, wrap,
 } from '../../lib/cm';
-import { baseName, isDesktop, saveAs, writeTextFile } from '../../lib/desktop';
+import { baseName, isDesktop, isTauri, saveAs, writeTextFile } from '../../lib/desktop';
 import { useDocTitle } from '../../lib/appState';
 import { DisplayMenu } from '../ui/DisplayMenu';
 import { download, toast } from '../ui/ui';
@@ -83,9 +83,9 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
 
   const saveToDisk = useCallback(async () => {
     if (text === null || !meta) return;
-    if (isDesktop) {
+    if (isTauri) {
       try {
-        if (meta.sourcePath) {
+        if (isDesktop && meta.sourcePath) {
           await writeTextFile(meta.sourcePath, text);
           toast('Saved to ' + baseName(meta.sourcePath));
           return;

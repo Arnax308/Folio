@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Bookmark, BookOpen, Check, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine,
+  ArrowLeft, Bookmark, BookOpen, Check, Ellipsis, FileDown, Search, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine,
 } from 'lucide-react';
 import type { Route } from '../../App';
 import { getDoc, getPdfBlob, getPdfState, patchDoc, savePdfState, uid } from '../../lib/db';
 import { clientRectToNorm, loadPdf, mergeRects, pointToNorm, type PDFDoc } from '../../lib/pdf';
-import { updateSettings, useSettings } from '../../lib/settings';
-import { useDocTitle, usePaletteProvider, type PaletteItem } from '../../lib/appState';
+import { updateSettings, useSettings, useTouchUI } from '../../lib/settings';
+import { isInteractive, usePinch } from '../../lib/gestures';
+import { openPalette, useDocTitle, usePaletteProvider, type PaletteItem } from '../../lib/appState';
 import { SpreadView, type SpreadHandle } from './SpreadView';
 import type { DocMeta, Highlight, HighlightColor, NRect, PdfState } from '../../lib/types';
 import { createMarkdown } from '../../lib/importer';
@@ -36,8 +37,11 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   const [visible, setVisible] = useState<Set<number>>(() => new Set([1, 2]));
   const [current, setCurrent] = useState(1);
   const [progress, setProgress] = useState(0);
-  const [leftOpen, setLeftOpen] = useState(() => window.innerWidth > 1180);
+  const touch = useTouchUI();
+  // On touch the panels are drawers over the page, so start with the page alone.
+  const [leftOpen, setLeftOpen] = useState(() => window.innerWidth > 1180 && !touch);
   const [rightOpen, setRightOpen] = useState(false);
+  const [chromeHidden, setChromeHidden] = useState(false);
   const [sideTab, setSideTab] = useState<SideTab>('pages');
   const [query, setQuery] = useState('');
   const [searchFocus, setSearchFocus] = useState(0);
@@ -384,16 +388,26 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   }, []);
 
   useEffect(() => {
+    let t: ReturnType<typeof setTimeout>;
     const onChange = () => {
       const s = window.getSelection();
       if (!s || s.isCollapsed) {
         selRange.current = null;
         setSel(null);
+        return;
+      }
+      // Touch: a long-press selection (and dragging its handles) only shows up here.
+      if (touch) {
+        clearTimeout(t);
+        t = setTimeout(checkSelection, 280);
       }
     };
     document.addEventListener('selectionchange', onChange);
-    return () => document.removeEventListener('selectionchange', onChange);
-  }, []);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener('selectionchange', onChange);
+    };
+  }, [touch, checkSelection]);
 
   const highlightsByPage = useMemo(() => {
     const m: Record<number, Highlight[]> = {};
@@ -458,26 +472,111 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
       const s = window.getSelection();
       if (s && !s.isCollapsed) return;
       const el = (e.target as HTMLElement).closest<HTMLElement>('.page');
-      if (!el) return;
-      const n = Number(el.dataset.page);
-      const list = highlightsByPage[n];
-      if (!list?.length) return;
-      const sz = sizes[n - 1];
-      const p = pointToNorm(e.clientX, e.clientY, el.getBoundingClientRect(), rotOf(n), sz.w * scale, sz.h * scale);
-      const pad = 0.004;
-      const hit = [...list].reverse().find((h) => h.rects.some((r) => p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad));
-      if (hit) setPop({ id: hit.id, x: e.clientX, y: e.clientY, focus: false });
+      if (el) {
+        const n = Number(el.dataset.page);
+        const list = highlightsByPage[n];
+        if (list?.length) {
+          const sz = sizes[n - 1];
+          const p = pointToNorm(e.clientX, e.clientY, el.getBoundingClientRect(), rotOf(n), sz.w * scale, sz.h * scale);
+          // fingers are less precise than a mouse pointer
+          const pad = touch ? 0.012 : 0.004;
+          const hit = [...list].reverse().find((h) => h.rects.some((r) => p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad));
+          if (hit) return setPop({ id: hit.id, x: e.clientX, y: e.clientY, focus: false });
+        }
+      }
+      // Touch: tapping the page hides / shows the toolbar, like a book app.
+      if (touch && !isInteractive(e.target)) setChromeHidden((h) => !h);
     },
-    [highlightsByPage, sizes, rotOf, scale],
+    [highlightsByPage, sizes, rotOf, scale, touch],
   );
+
+  // Opening a drawer brings the toolbar back.
+  useEffect(() => {
+    if (leftOpen || rightOpen) setChromeHidden(false);
+  }, [leftOpen, rightOpen]);
+
+  /* ------------------------------ Pinch zoom ----------------------------- */
+  const pinch = useRef<{ target: HTMLElement; base: number; page?: { i: number; fx: number; fy: number } } | null>(null);
+  const pinchDone = useRef<{ target: HTMLElement; page?: { i: number; fx: number; fy: number }; mx: number; my: number } | null>(null);
+  const zoomBounds = () => (layoutRef.current === 'spread' ? [scaleRef.current / spreadZoomRef.current * 0.5, scaleRef.current / spreadZoomRef.current * 5] : [0.25, 5]);
+  usePinch(
+    scroller,
+    {
+      onStart: (mid) => {
+        const sc = scroller.current;
+        const target = layoutRef.current === 'spread' ? sc?.querySelector<HTMLElement>('.book-wrap') : pagesRef.current;
+        if (!target) return;
+        const r = target.getBoundingClientRect();
+        let page: { i: number; fx: number; fy: number } | undefined;
+        if (layoutRef.current !== 'spread' && pagesRef.current) {
+          const els = Array.from(pagesRef.current.children) as HTMLElement[];
+          const i = els.findIndex((el) => el.getBoundingClientRect().bottom >= mid.y);
+          if (i >= 0) {
+            const pr = els[i].getBoundingClientRect();
+            page = { i, fx: (mid.x - pr.left) / pr.width, fy: (mid.y - pr.top) / pr.height };
+          }
+        }
+        target.classList.add('pinching');
+        target.style.transformOrigin = `${mid.x - r.left}px ${mid.y - r.top}px`;
+        pinch.current = { target, base: scaleRef.current, page };
+      },
+      onMove: (k, mid, mid0) => {
+        const p = pinch.current;
+        if (!p) return;
+        const [lo, hi] = zoomBounds();
+        const kk = clamp(p.base * k, lo, hi) / p.base;
+        p.target.style.transform = `translate(${mid.x - mid0.x}px, ${mid.y - mid0.y}px) scale(${kk})`;
+      },
+      onEnd: (k, mid) => {
+        const p = pinch.current;
+        pinch.current = null;
+        if (!p) return;
+        const [lo, hi] = zoomBounds();
+        const next = clamp(p.base * k, lo, hi);
+        const reset = () => {
+          p.target.style.transform = '';
+          p.target.style.transformOrigin = '';
+          p.target.classList.remove('pinching');
+        };
+        if (Math.abs(next - p.base) < 0.01) return reset();
+        const done = { target: p.target, page: p.page, mx: mid.x, my: mid.y };
+        pinchDone.current = done;
+        if (layoutRef.current === 'spread') setSpreadZoom((z) => clamp(Math.round(z * (next / p.base) * 100) / 100, 0.5, 5));
+        else setZoom(Math.round(next * 100) / 100);
+        // If the zoom didn't actually change (already at a limit), nothing re-renders: drop the preview anyway.
+        setTimeout(() => {
+          if (pinchDone.current !== done) return;
+          pinchDone.current = null;
+          reset();
+        }, 400);
+      },
+    },
+    touch && !!doc,
+  );
+  // After a pinch, swap the preview transform for the real zoom and keep the pinched spot under the fingers.
+  useLayoutEffect(() => {
+    const d = pinchDone.current;
+    if (!d) return;
+    pinchDone.current = null;
+    d.target.style.transform = '';
+    d.target.style.transformOrigin = '';
+    d.target.classList.remove('pinching');
+    const sc = scroller.current;
+    const el = d.page && (pagesRef.current?.children[d.page.i] as HTMLElement | undefined);
+    if (!sc || !el || !d.page) return;
+    const r = el.getBoundingClientRect();
+    sc.scrollLeft += r.left + d.page.fx * r.width - d.mx;
+    sc.scrollTop += r.top + d.page.fy * r.height - d.my;
+  }, [scale]);
 
   const jumpTo = useCallback(
     (h: Highlight) => {
+      if (touch) setRightOpen(false);
       goTo(h.page, rotOf(h.page) === 0 ? h.rects[0]?.y : undefined);
       setFlash(h.id);
       setTimeout(() => setFlash((f) => (f === h.id ? null : f)), 1800);
     },
-    [goTo, rotOf],
+    [goTo, rotOf, touch],
   );
 
   /* ----------------------------- Keyboard ------------------------------ */
@@ -609,7 +708,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   const numPages = sizes.length;
 
   return (
-    <div className={`reader pdf-reader filter-${settings.pageFilter}`}>
+    <div className={`reader pdf-reader filter-${settings.pageFilter}${chromeHidden ? ' chrome-hidden' : ''}`}>
       <header className="reader-bar">
         <div className="bar-left">
           <button className="icon-btn" data-tip="Library" aria-label="Back to library" onClick={() => go({ view: 'library' })}>
@@ -626,6 +725,11 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         </div>
 
         <div className="bar-right">
+          {touch && (
+            <button className="icon-btn" aria-label="Search and go to" onClick={openPalette}>
+              <Search size={17} />
+            </button>
+          )}
           <button
             className={'icon-btn' + (spread ? ' active' : '')}
             data-tip={spread ? 'Scroll view  D' : 'Two-page view  D'}
@@ -635,7 +739,8 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
           >
             <BookOpen size={17} />
           </button>
-          <span className="divider-v" />
+          {!touch && <span className="divider-v" />}
+          {!touch && (<>
           <div className="zoom-group">
             <button className="icon-btn" data-tip="Zoom out  −" aria-label="Zoom out" onClick={zoomOut}>
               <ZoomOut size={17} />
@@ -672,6 +777,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
             <RotateCw size={17} />
           </button>
           <span className="divider-v" />
+          </>)}
           <button
             className={'icon-btn' + (bookmarks.includes(current) ? ' active' : '')}
             data-tip={bookmarks.includes(current) ? 'Remove bookmark  B' : 'Bookmark page  B'}
@@ -686,6 +792,43 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
             <StickyNote size={17} />
             {!!state?.highlights.length && <span className="btn-badge">{state.highlights.length}</span>}
           </button>
+          {touch && (
+            <PopoverButton icon={<Ellipsis size={18} />} tip="More" width={290}>
+              {(close) => (
+                <>
+                  <div className="menu-label">Zoom · {zoomLabel} · pinch to zoom</div>
+                  <button className="menu-item" onClick={() => (applyZoom(spread ? 'fit-page' : 'fit-width'), close())}>
+                    <ScanLine size={16} /> {spread ? 'Fit the spread' : 'Fit width'}
+                  </button>
+                  {!spread && (
+                    <button className="menu-item" onClick={() => (applyZoom('fit-page'), close())}>
+                      <Maximize2 size={16} /> Fit page
+                    </button>
+                  )}
+                  <button className="menu-item" onClick={() => zoomIn()}>
+                    <ZoomIn size={16} /> Zoom in
+                  </button>
+                  <button className="menu-item" onClick={() => zoomOut()}>
+                    <ZoomOut size={16} /> Zoom out
+                  </button>
+                  <div className="menu-sep" />
+                  <button className="menu-item" onClick={() => rotateAll(-90)}>
+                    <RotateCcw size={16} /> Rotate left
+                  </button>
+                  <button className="menu-item" onClick={() => rotateAll(90)}>
+                    <RotateCw size={16} /> Rotate right
+                  </button>
+                  <div className="menu-sep" />
+                  <button className="menu-item" onClick={() => (close(), setLeftOpen(true), setSideTab('search'), setSearchFocus((n) => n + 1))}>
+                    <Search size={16} /> Search in this PDF
+                  </button>
+                  <button className="menu-item" onClick={() => (close(), exportPdf())}>
+                    <FileDown size={16} /> Export PDF with highlights
+                  </button>
+                </>
+              )}
+            </PopoverButton>
+          )}
         </div>
         <div className="progress-line">
           <div style={{ transform: `scaleX(${progress})` }} />
@@ -705,7 +848,10 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
             hlCount={hlCount}
             bookmarks={bookmarks}
             toggleBookmark={toggleBookmark}
-            goTo={goTo}
+            goTo={(n, y) => {
+              goTo(n, y);
+              if (touch) setLeftOpen(false);
+            }}
             query={query}
             setQuery={setQuery}
             searchFocus={searchFocus}
@@ -774,6 +920,16 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
           )}
         </div>
 
+        {touch && (leftOpen || rightOpen) && (
+          <div
+            className="drawer-scrim"
+            onClick={() => {
+              setLeftOpen(false);
+              setRightOpen(false);
+            }}
+          />
+        )}
+
         {rightOpen && state && (
           <NotesPanel
             highlights={state.highlights}
@@ -790,7 +946,13 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         )}
       </div>
 
-      {sel && <SelectionToolbar rect={sel} lastColor={lastColor} onColor={(c) => createHighlight(c)} onNote={() => createHighlight(lastColor, true)} onCopy={() => {
+      {chromeHidden && numPages > 0 && (
+        <div className="float-page">
+          {current} <span>of {numPages}</span>
+        </div>
+      )}
+
+      {sel && <SelectionToolbar below={touch} rect={sel} lastColor={lastColor} onColor={(c) => createHighlight(c)} onNote={() => createHighlight(lastColor, true)} onCopy={() => {
         navigator.clipboard.writeText(window.getSelection()?.toString() ?? '');
         toast('Copied');
       }} />}

@@ -1,5 +1,17 @@
-/** Helpers that only do something inside the Tauri desktop shell. */
-export const isDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+/** Helpers for the Tauri shells (Windows desktop app and Android app). */
+
+/** Running inside a Folio app (desktop or Android), not a plain browser. */
+export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+export const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+/** The Windows desktop app: own title bar, Explorer integration, save-back to files on disk. */
+export const isDesktop = isTauri && !isAndroid;
+
+/**
+ * `accept` for a file input. Android's picker filters by MIME type and most file managers don't know
+ * `.md`, so there we allow everything and let the importer skip what it can't open.
+ */
+export const fileAccept = (kind: 'docs' | 'backup') =>
+  isAndroid ? '*/*' : kind === 'docs' ? '.pdf,.md,.markdown,.txt,application/pdf,text/markdown' : '.zip,application/zip';
 
 const core = () => import('@tauri-apps/api/core');
 
@@ -10,7 +22,7 @@ export interface OpenedFile {
 
 /** Files Folio was asked to open (Explorer double-click / "Open with"), at launch or while running. */
 export async function takePendingFiles(): Promise<OpenedFile[]> {
-  if (!isDesktop) return [];
+  if (!isTauri) return [];
   const { invoke } = await core();
   const paths = await invoke<string[]>('take_pending');
   const out: OpenedFile[] = [];
@@ -49,7 +61,7 @@ export async function saveAs(name: string, data: Blob | string): Promise<string 
 }
 
 export async function openExternal(url: string) {
-  if (!isDesktop) {
+  if (!isTauri) {
     window.open(url, '_blank', 'noopener');
     return;
   }

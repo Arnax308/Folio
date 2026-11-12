@@ -12,6 +12,14 @@ export function DisplayMenu({ mode }: { mode: 'pdf' | 'md' }) {
           <div style={{ padding: '6px 10px 10px' }}>
             <ThemePicker />
           </div>
+          <div className="menu-label">Interface</div>
+          <div style={{ padding: '4px 8px 8px' }}>
+            <div className="segmented full">
+              <button className={s.uiMode === 'auto' ? 'on' : ''} onClick={() => updateSettings({ uiMode: 'auto' })}>Auto</button>
+              <button className={s.uiMode === 'touch' ? 'on' : ''} onClick={() => updateSettings({ uiMode: 'touch' })}>Touch</button>
+              <button className={s.uiMode === 'mouse' ? 'on' : ''} onClick={() => updateSettings({ uiMode: 'mouse' })}>Mouse</button>
+            </div>
+          </div>
           {mode === 'pdf' ? (
             <>
               <div className="menu-label">Pages</div>

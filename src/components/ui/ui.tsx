@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Check, Moon, Sun, Coffee } from 'lucide-react';
 import { updateSettings, useSettings, type Theme } from '../../lib/settings';
-import { baseName, isDesktop, saveAs } from '../../lib/desktop';
+import { baseName, isTauri, saveAs } from '../../lib/desktop';
 
 /* ------------------------------- Toasts ------------------------------- */
 type ToastItem = { id: number; text: string };
@@ -193,7 +193,7 @@ export function timeAgo(t: number) {
 
 /** Saves a file: a native "Save as" dialog in the desktop app, a normal download in the browser. */
 export function download(name: string, content: Blob | string, type = 'text/markdown') {
-  if (isDesktop) {
+  if (isTauri) {
     saveAs(name, content)
       .then((path) => path && toast('Saved to ' + baseName(path)))
       .catch(() => toast('Could not save the file'));

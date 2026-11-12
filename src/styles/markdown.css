@@ -42,7 +42,7 @@
   --measure: 68ch;
   max-width: calc(var(--measure) + 96px);
   margin: 0 auto;
-  padding: 104px 48px 30vh;
+  padding: calc(var(--bar-h) + 52px) 48px 30vh;
 }
 .md-meta {
   display: flex;
@@ -70,7 +70,7 @@
 
 .toc-panel {
   width: 248px;
-  padding: 52px 0 0;
+  padding: var(--bar-h) 0 0;
 }
 .toc-label {
   padding: 22px 22px 10px;
@@ -514,7 +514,7 @@
   border-left: 1px solid var(--line);
 }
 .mode-split .preview-pane .md-page {
-  padding-top: 92px;
+  padding-top: calc(var(--bar-h) + 40px);
 }
 .cm-host {
   height: 100%;
@@ -524,7 +524,7 @@
 }
 .format-bar {
   position: absolute;
-  top: 62px;
+  top: calc(var(--bar-h) + 10px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
@@ -552,7 +552,7 @@
 }
 .mode-write .cm-content,
 .mode-split .cm-content {
-  padding-top: 120px !important;
+  padding-top: calc(var(--bar-h) + 68px) !important;
 }
 .status-bar {
   display: flex;

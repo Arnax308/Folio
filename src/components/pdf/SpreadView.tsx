@@ -227,29 +227,40 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
     [],
   );
 
-  /* ---------------------- Drag a page edge to turn ---------------------- */
-  const onEdgeDown = (dir: 1 | -1) => (ev: React.PointerEvent) => {
-    if (ev.button !== 0 || flip) return;
-    ev.preventDefault();
+  /* ------------------- Drag a page (edge or swipe) to turn ------------------- */
+  /**
+   * `edge`: grabbed by its outer edge; the curl follows the pointer's position.
+   * `swipe`: a finger swiped across the page; the curl follows how far it has travelled.
+   */
+  const startDrag = (dir: 1 | -1, x: number, y: number, mode: 'edge' | 'swipe') => {
     const to = idx + dir;
-    if (to < 0 || to >= spreads.length) return;
-    if (!animate) return setIdx(to);
+    if (to < 0 || to >= spreads.length) return false;
+    if (!animate) {
+      setIdx(to);
+      return true;
+    }
     const book = bookRef.current;
     const pageNum = dir === 1 ? spreads[idx][1] : spreads[idx][0];
     const el = pageNum ? book?.querySelector<HTMLElement>(`.book-page[data-pg="${pageNum}"] .page`) : null;
-    if (!book || !el) return turn(dir);
+    if (!book || !el) {
+      turn(dir);
+      return true;
+    }
     const rect = book.getBoundingClientRect();
     const spineX = rect.left + rect.width / 2;
     const W = el.offsetWidth;
     const H = el.offsetHeight;
-    const at = (x: number) => progressAtPointer(dir === 1 ? x - spineX : spineX - x, W, H);
+    const at = (px: number) =>
+      mode === 'edge'
+        ? progressAtPointer(dir === 1 ? px - spineX : spineX - px, W, H)
+        : Math.min(1, Math.max(0, ((x - px) * dir) / (W * 1.15)));
     const drag: Drag = {
       dir,
-      x0: ev.clientX,
+      x0: x,
       t0: performance.now(),
-      moved: false,
-      e: at(ev.clientX),
-      tilt: ev.clientY < rect.top + rect.height / 2 ? -1 : 1,
+      moved: mode === 'swipe',
+      e: at(x),
+      tilt: y < rect.top + rect.height / 2 ? -1 : 1,
       spineX,
       W,
       H,
@@ -258,9 +269,17 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
     dragRef.current = drag;
     setFlip({ dir, to, mode: 'curl', manual: true });
 
+    // recent positions, to tell a flick from a slow drag
+    let vx = 0;
+    let lastX = x;
+    let lastT = performance.now();
     const move = (m: PointerEvent) => {
       if (dragRef.current !== drag) return;
       if (Math.abs(m.clientX - drag.x0) > 4) drag.moved = true;
+      const now = performance.now();
+      if (now > lastT) vx = vx * 0.4 + ((m.clientX - lastX) / (now - lastT)) * 0.6;
+      lastX = m.clientX;
+      lastT = now;
       drag.e = at(m.clientX);
       curlRef.current?.follow(drag.e);
     };
@@ -269,9 +288,11 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
       if (dragRef.current !== drag) return;
-      // A quick press without movement turns the page; a drag turns it if you pulled far enough.
+      // A quick press without movement turns the page; a drag turns it if you pulled far enough,
+      // or flicked it in the turning direction.
       const tap = !drag.moved && performance.now() - drag.t0 < 400;
-      const how = tap ? 'tap' : drag.e > 0.4 ? 'complete' : 'cancel';
+      const flick = -vx * dir > 0.45 && performance.now() - lastT < 120;
+      const how = tap ? 'tap' : drag.e > (mode === 'swipe' ? 0.3 : 0.4) || flick ? 'complete' : 'cancel';
       if (curlRef.current) {
         release(curlRef.current, how, to);
         dragRef.current = null;
@@ -282,6 +303,38 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', up);
+    return true;
+  };
+
+  const onEdgeDown = (dir: 1 | -1) => (ev: React.PointerEvent) => {
+    if (ev.button !== 0 || flip || !ev.isPrimary) return;
+    ev.preventDefault();
+    startDrag(dir, ev.clientX, ev.clientY, 'edge');
+  };
+
+  // Touch: swipe across the book to turn. A long press still selects text; two fingers pinch.
+  const swipe = useRef<{ id: number; x: number; y: number; t: number } | null>(null);
+  const onBookPointerDown = (ev: React.PointerEvent) => {
+    if (ev.pointerType !== 'touch' || flip || !atFit) return;
+    if (!ev.isPrimary) {
+      swipe.current = null; // second finger: it's a pinch
+      return;
+    }
+    if ((ev.target as HTMLElement).closest('.turn-edge')) return;
+    swipe.current = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, t: performance.now() };
+  };
+  const onBookPointerMove = (ev: React.PointerEvent) => {
+    const s = swipe.current;
+    if (!s || ev.pointerId !== s.id) return;
+    const dx = ev.clientX - s.x;
+    const dy = ev.clientY - s.y;
+    if (Math.abs(dx) < 14 || Math.abs(dx) < Math.abs(dy) * 1.4) {
+      if (Math.abs(dy) > 24 || performance.now() - s.t > 450) swipe.current = null; // not a swipe
+      return;
+    }
+    swipe.current = null;
+    if (window.getSelection()?.toString()) return; // adjusting a text selection
+    startDrag(dx < 0 ? 1 : -1, s.x, s.y, 'swipe');
   };
 
   /* ------------------------------ Zoom & pan ------------------------------ */
@@ -332,6 +385,13 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
     return { slotW: Math.round(w), slotH: Math.round(h) };
   }, [sizes, scale, rotOf]);
 
+  // At fit size the stage doesn't scroll, so a one-finger drag can turn pages instead of panning.
+  const [atFit, setAtFit] = useState(true);
+  useLayoutEffect(() => {
+    const s = stageRef.current;
+    if (s) setAtFit(!(s.scrollHeight > s.clientHeight + 8 || s.scrollWidth > s.clientWidth + 8));
+  }, [scale, slotW, slotH]);
+
   const cur = spreads[idx] ?? [null, null];
   const roles = new Map<number, Role>();
   const set = (page: number | null, role: Role) => page && roles.set(page, role);
@@ -371,10 +431,13 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
 
   return (
     <div className="spread-root">
-      <div className="spread-stage" ref={stageRef} onWheel={onWheel} onScroll={onStageScroll}>
+      <div className={'spread-stage' + (atFit ? ' at-fit' : '')} ref={stageRef} onWheel={onWheel} onScroll={onStageScroll}>
         <div className="book-wrap">
           <div
             ref={bookRef}
+            onPointerDown={onBookPointerDown}
+            onPointerMove={onBookPointerMove}
+            onPointerUp={() => (swipe.current = null)}
             className={'book' + (flip ? ` turning dir-${flip.dir === 1 ? 'fwd' : 'bwd'} mode-${flip.mode}` : '') + (flip?.manual ? ' dragging' : '')}
             style={{ width: slotW * 2, height: slotH, ['--turn-ms' as string]: TURN_MS + 'ms', ['--slot-w' as string]: slotW + 'px' }}
           >

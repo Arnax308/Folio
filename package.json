@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "desktop": "tauri dev",
     "desktop:build": "tauri build",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "android:build": "bash scripts/build-android.sh"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.2",
