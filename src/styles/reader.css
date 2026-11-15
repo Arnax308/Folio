@@ -1294,3 +1294,27 @@
 .switch.on .switch-knob {
   transform: translateX(15px);
 }
+
+/* ------------------------------------------------------------------ */
+/*  Slow (scanned) pages: show the words first, fade the scan in       */
+/* ------------------------------------------------------------------ */
+.page.pending .textLayer :is(span, br) {
+  color: rgba(40, 40, 40, 0.62);
+}
+.filter-night .page.pending .textLayer :is(span, br) {
+  color: rgba(215, 215, 215, 0.6);
+}
+.page.pending:has(.textLayer span) .page-skeleton {
+  background: linear-gradient(100deg, transparent 30%, rgba(0, 0, 0, 0.025) 50%, transparent 70%) 0 0 / 200% 100%;
+}
+.canvas-wrap canvas.arrive {
+  animation: page-arrive 0.28s var(--ease);
+}
+@keyframes page-arrive {
+  from {
+    opacity: 0;
+  }
+}
+.page-skeleton {
+  pointer-events: none;
+}

@@ -1,5 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { pdfjs, rotationTransform, type PDFDoc } from '../../lib/pdf';
+import { getPage, pdfjs, rotationTransform, type PDFDoc } from '../../lib/pdf';
+import { PRIORITY, toolsFor } from '../../lib/renderQueue';
+import { getLinks, type PdfLink } from '../../lib/references';
 import type { Highlight } from '../../lib/types';
 
 export interface PageSize { w: number; h: number }
@@ -16,16 +18,11 @@ interface Props {
   flashId: string | null;
   search: string;
   bookmarked?: boolean;
+  /** Links in the PDF (note markers, citations…): hover / click / leave. */
+  onLink?: (link: PdfLink, rect: DOMRect, kind: 'enter' | 'leave' | 'click') => void;
 }
 
-const pageCache = new WeakMap<PDFDoc, Map<number, Promise<pdfjs.PDFPageProxy>>>();
-export function getPage(doc: PDFDoc, n: number) {
-  let m = pageCache.get(doc);
-  if (!m) pageCache.set(doc, (m = new Map()));
-  let p = m.get(n);
-  if (!p) m.set(n, (p = doc.getPage(n)));
-  return p;
-}
+export { getPage }; // used across the PDF components
 
 /**
  * Marks every occurrence of `q` in the text layer. Matches may run across several spans and
@@ -79,7 +76,16 @@ function markSearch(layer: HTMLElement, q: string) {
   }
 }
 
-function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, activeId, flashId, search, bookmarked }: Props) {
+function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, activeId, flashId, search, bookmarked, onLink }: Props) {
+  const [links, setLinks] = useState<PdfLink[]>([]);
+  useEffect(() => {
+    if (!visible || !onLink) return;
+    let gone = false;
+    getLinks(doc, num).then((l) => !gone && setLinks(l));
+    return () => {
+      gone = true;
+    };
+  }, [visible, doc, num, onLink]);
   const canvasWrap = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const renderedRef = useRef(0);
@@ -90,72 +96,100 @@ function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, ac
   const h = size.h * scale;
   const rotated = rotation % 180 !== 0;
 
-  // Render canvas + text layer when visible
+  // Text layer: cheap, scale-independent (it is sized with --scale-factor), so it renders once and
+  // first — on a slow scanned page the words show up straight away while the image decodes.
+  const textDone = useRef(false);
+  useEffect(() => {
+    if (!visible || textDone.current) return;
+    let cancelled = false;
+    let textLayer: pdfjs.TextLayer | null = null;
+    (async () => {
+      const page = await getPage(doc, num);
+      const tl = textRef.current;
+      if (cancelled || !tl) return;
+      tl.replaceChildren();
+      textLayer = new pdfjs.TextLayer({
+        textContentSource: page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
+        container: tl,
+        viewport: page.getViewport({ scale: 1 }),
+      });
+      try {
+        await textLayer.render();
+      } catch {
+        return; // cancelled
+      }
+      if (cancelled) return;
+      const end = document.createElement('div');
+      end.className = 'endOfContent';
+      tl.append(end);
+      textDone.current = true;
+      setTextReady((n) => n + 1);
+    })();
+    return () => {
+      cancelled = true;
+      textLayer?.cancel();
+    };
+  }, [visible, doc, num]);
+
+  // Canvas: from the cache if this page was shown recently, otherwise through the render queue.
   useEffect(() => {
     if (!visible) return;
     if (renderedRef.current === scale) return;
-    const first = !renderedRef.current;
-    let cancelled = false;
-    let task: pdfjs.RenderTask | null = null;
-    let textLayer: pdfjs.TextLayer | null = null;
-    const t = setTimeout(async () => {
-      const page = await getPage(doc, num);
-      if (cancelled) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
-      const vp = page.getViewport({ scale: scale * dpr });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.floor(vp.width);
-      canvas.height = Math.floor(vp.height);
-      const ctx = canvas.getContext('2d', { alpha: false })!;
-      task = page.render({ canvasContext: ctx, viewport: vp });
-      try {
-        await task.promise;
-      } catch {
-        return;
-      }
-      if (cancelled) return;
-      canvasWrap.current?.replaceChildren(canvas);
+    const { queue, cache, thumbs } = toolsFor(doc);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const cached = cache.take(num, scale * dpr);
+    if (cached) {
+      canvasWrap.current?.replaceChildren(cached);
       renderedRef.current = scale;
       setRendered(true);
-
-      const tl = textRef.current;
-      if (tl) {
-        tl.replaceChildren();
-        textLayer = new pdfjs.TextLayer({
-          textContentSource: page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
-          container: tl,
-          viewport: page.getViewport({ scale }),
-        });
-        try {
-          await textLayer.render();
-          const end = document.createElement('div');
-          end.className = 'endOfContent';
-          tl.append(end);
-          if (!cancelled) setTextReady((n) => n + 1);
-        } catch {
-          /* cancelled */
-        }
-      }
-    }, first ? 0 : 60);
+      return;
+    }
+    let cancelled = false;
+    let task: pdfjs.RenderTask | null = null;
+    const cancelJob = queue.add(
+      () => PRIORITY.page(num, queue.focus),
+      async () => {
+        if (cancelled) return;
+        const page = await getPage(doc, num);
+        if (cancelled) return;
+        const vp = page.getViewport({ scale: scale * dpr });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.floor(vp.width);
+        canvas.height = Math.floor(vp.height);
+        const ctx = canvas.getContext('2d', { alpha: false })!;
+        task = page.render({ canvasContext: ctx, viewport: vp });
+        await task.promise;
+        if (cancelled) return;
+        if (!renderedRef.current) canvas.classList.add('arrive'); // fade in only on first appearance
+        canvasWrap.current?.replaceChildren(canvas);
+        renderedRef.current = scale;
+        setRendered(true);
+        thumbs.fromCanvas(num, canvas);
+      },
+      () => task?.cancel(),
+    );
     return () => {
       cancelled = true;
-      clearTimeout(t);
-      task?.cancel();
-      textLayer?.cancel();
+      cancelJob();
     };
   }, [visible, scale, doc, num]);
 
-  // Free memory for far-away pages
+  // Far-away pages: keep the finished canvas in the cache, release the decoded scan inside pdf.js.
   useEffect(() => {
     if (visible || !rendered) return;
     const t = setTimeout(() => {
+      const canvas = canvasWrap.current?.querySelector('canvas');
+      const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+      if (canvas && renderedRef.current) toolsFor(doc).cache.put(num, renderedRef.current * dpr, canvas);
       canvasWrap.current?.replaceChildren();
       textRef.current?.replaceChildren();
+      textDone.current = false;
       renderedRef.current = 0;
       setRendered(false);
+      getPage(doc, num).then((p) => p.cleanup()).catch(() => {});
     }, 1500);
     return () => clearTimeout(t);
-  }, [visible, rendered]);
+  }, [visible, rendered, doc, num]);
 
   useEffect(() => {
     if (textRef.current && textReady) markSearch(textRef.current, search);
@@ -163,7 +197,7 @@ function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, ac
 
   return (
     <div
-      className="page"
+      className={'page' + (rendered ? '' : ' pending')}
       data-page={num}
       style={{ width: rotated ? h : w, height: rotated ? w : h }}
     >
@@ -202,6 +236,26 @@ function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, ac
             })}
         </div>
         <div className="textLayer" ref={textRef} />
+        {onLink && links.length > 0 && (
+          <div className="link-layer">
+            {links.map((l, i) => (
+              <a
+                key={i}
+                className={'pdf-link' + (l.url ? ' external' : '')}
+                href={l.url ?? '#'}
+                aria-label={l.url ? 'Open link' : 'Show reference'}
+                style={{ left: l.rect.x * 100 + '%', top: l.rect.y * 100 + '%', width: l.rect.w * 100 + '%', height: l.rect.h * 100 + '%' }}
+                onMouseEnter={(e) => onLink(l, e.currentTarget.getBoundingClientRect(), 'enter')}
+                onMouseLeave={(e) => onLink(l, e.currentTarget.getBoundingClientRect(), 'leave')}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onLink(l, e.currentTarget.getBoundingClientRect(), 'click');
+                }}
+              />
+            ))}
+          </div>
+        )}
       </div>
       {!rendered && <div className="page-skeleton" />}
       {bookmarked && <span className="page-ribbon" aria-label="Bookmarked" />}

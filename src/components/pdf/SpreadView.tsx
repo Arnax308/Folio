@@ -4,6 +4,7 @@ import type { PDFDoc } from '../../lib/pdf';
 import type { Highlight } from '../../lib/types';
 import { createCurl, easeInOut, easeOut, progressAtPointer, snapshotPage, type CurlController } from '../../lib/pageCurl';
 import { PageView, type PageSize } from './PageView';
+import type { PdfLink } from '../../lib/references';
 
 export interface SpreadHandle {
   goTo: (page: number) => void;
@@ -24,6 +25,7 @@ interface Props {
   animate: boolean;
   pageFilter: string;
   bookmarks: number[];
+  onLink?: (link: PdfLink, rect: DOMRect, kind: 'enter' | 'leave' | 'click') => void;
   initialPage: number;
   onPage: (first: number, progress: number) => void;
 }
@@ -463,6 +465,7 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
                     flashId={p.flashId}
                     search={p.search}
                     bookmarked={p.bookmarks.includes(pg)}
+                    onLink={role === 'L' || role === 'R' ? p.onLink : undefined}
                   />
                 </div>
               );

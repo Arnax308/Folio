@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { Bookmark, ChevronRight, LayoutGrid, List, RotateCcw, RotateCw, Search, X } from 'lucide-react';
-import type { PDFDoc } from '../../lib/pdf';
+import type { PDFDoc, pdfjs } from '../../lib/pdf';
+import { PRIORITY, toolsFor } from '../../lib/renderQueue';
 import { getPage, type PageSize } from './PageView';
 
 export type SideTab = 'pages' | 'outline' | 'search';
@@ -50,9 +51,13 @@ export function Sidebar(p: Props) {
 /* ----------------------------- Thumbnails ----------------------------- */
 function Thumbs({ doc, sizes, current, rotationOf, rotatePage, hlCount, goTo, bookmarks, toggleBookmark }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
+  const prevCurrent = useRef(current);
   useEffect(() => {
     const el = listRef.current?.querySelector<HTMLElement>(`[data-thumb="${current}"]`);
-    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // a big jump scrolls the list instantly, so the thumbnails in between aren't all requested
+    const far = Math.abs(current - prevCurrent.current) > 8;
+    prevCurrent.current = current;
+    el?.scrollIntoView({ block: 'nearest', behavior: far ? 'auto' : 'smooth' });
   }, [current]);
   return (
     <div className="thumbs" ref={listRef}>
@@ -108,26 +113,37 @@ const Thumb = memo(function Thumb({
     return () => io.disconnect();
   }, []);
 
+  // A page you've already read hands its thumbnail over for free; otherwise render one in the
+  // background, behind every page being read, and drop the job if it scrolls out of view.
+  useEffect(() => {
+    if (src) return;
+    const { thumbs } = toolsFor(doc);
+    const have = thumbs.get(n);
+    if (have) return setSrc(have);
+    return thumbs.subscribe(n, setSrc);
+  }, [doc, n, src]);
+
   useEffect(() => {
     if (!visible || src) return;
-    let cancelled = false;
-    (async () => {
-      const page = await getPage(doc, n);
-      const scale = (THUMB_W * 2) / size.w;
-      const vp = page.getViewport({ scale });
-      const c = document.createElement('canvas');
-      c.width = Math.floor(vp.width);
-      c.height = Math.floor(vp.height);
-      try {
-        await page.render({ canvasContext: c.getContext('2d')!, viewport: vp }).promise;
-      } catch {
-        return;
-      }
-      if (!cancelled) setSrc(c.toDataURL('image/jpeg', 0.8));
-    })();
-    return () => {
-      cancelled = true;
-    };
+    const { queue, thumbs } = toolsFor(doc);
+    let task: ReturnType<pdfjs.PDFPageProxy['render']> | null = null;
+    const cancel = queue.add(
+      () => PRIORITY.thumb(n, queue.focus),
+      async () => {
+        if (thumbs.get(n)) return;
+        const page = await getPage(doc, n);
+        const scale = (THUMB_W * 2) / size.w;
+        const vp = page.getViewport({ scale });
+        const c = document.createElement('canvas');
+        c.width = Math.floor(vp.width);
+        c.height = Math.floor(vp.height);
+        task = page.render({ canvasContext: c.getContext('2d')!, viewport: vp });
+        await task.promise;
+        thumbs.set(n, c.toDataURL('image/jpeg', 0.8));
+      },
+      () => task?.cancel(),
+    );
+    return cancel;
   }, [visible, src, doc, n, size.w]);
 
   return (

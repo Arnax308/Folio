@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Bookmark, BookOpen, Check, Ellipsis, FileDown, Search, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine,
+  ArrowLeft, Bookmark, BookOpen, Check, Ellipsis, FileDown, NotebookText, Search, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine,
 } from 'lucide-react';
 import type { Route } from '../../App';
 import { getDoc, getPdfBlob, getPdfState, patchDoc, savePdfState, uid } from '../../lib/db';
 import { clientRectToNorm, loadPdf, mergeRects, pointToNorm, type PDFDoc } from '../../lib/pdf';
 import { updateSettings, useSettings, useTouchUI } from '../../lib/settings';
 import { isInteractive, usePinch } from '../../lib/gestures';
+import { toolsFor } from '../../lib/renderQueue';
+import { analyzeNotes, notesFor, printedPage, resolveDest, type DestTarget, type PdfLink } from '../../lib/references';
+import { openExternal } from '../../lib/desktop';
+import { BackChip, LinkPreview, NotesPeek, type LinkPeek } from './RefUI';
 import { openPalette, useDocTitle, usePaletteProvider, type PaletteItem } from '../../lib/appState';
 import { SpreadView, type SpreadHandle } from './SpreadView';
 import type { DocMeta, Highlight, HighlightColor, NRect, PdfState } from '../../lib/types';
@@ -42,6 +46,9 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   const [leftOpen, setLeftOpen] = useState(() => window.innerWidth > 1180 && !touch);
   const [rightOpen, setRightOpen] = useState(false);
   const [chromeHidden, setChromeHidden] = useState(false);
+  const [linkPeek, setLinkPeek] = useState<LinkPeek | null>(null);
+  const [notesPeekOpen, setNotesPeekOpen] = useState(false);
+  const [backStack, setBackStack] = useState<number[]>([]);
   const [sideTab, setSideTab] = useState<SideTab>('pages');
   const [query, setQuery] = useState('');
   const [searchFocus, setSearchFocus] = useState(0);
@@ -254,6 +261,11 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     if (el && scroller.current) scroller.current.scrollTop = el.offsetTop + pagesRef.current!.offsetTop - PAD_TOP + 4;
   }, [layout, current]);
 
+  // The render queue serves the page being read first.
+  useEffect(() => {
+    if (doc) toolsFor(doc).queue.setFocus(current);
+  }, [doc, current]);
+
   const onSpreadPage = useCallback((first: number, p: number) => {
     setCurrent(first);
     setProgress(p);
@@ -282,7 +294,11 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     if (doc) onScroll();
   }, [doc, scale, onScroll]);
 
+  const docRef = useRef<PDFDoc | null>(null);
+  docRef.current = doc;
   const goTo = useCallback((n: number, yFrac?: number) => {
+    // tell the render queue first, so the destination page renders before anything near the old one
+    if (docRef.current) toolsFor(docRef.current).queue.setFocus(n);
     if (layoutRef.current === 'spread') return spreadRef.current?.goTo(n);
     const sc = scroller.current;
     const pages = pagesRef.current;
@@ -579,6 +595,79 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     [goTo, rotOf, touch],
   );
 
+  /* ----------------------------- References ----------------------------- */
+  // Following a link or opening a notes page remembers where you were.
+  const currentRef = useRef(current);
+  currentRef.current = current;
+  const jumpAway = useCallback(
+    (page: number, y?: number | null) => {
+      const from = currentRef.current;
+      if (from !== page) setBackStack((st) => [...st.slice(-19), from]);
+      goTo(page, y ?? undefined);
+    },
+    [goTo],
+  );
+  const backRef = useRef(backStack);
+  backRef.current = backStack;
+  const goBack = useCallback(() => {
+    const st = backRef.current;
+    const top = st[st.length - 1];
+    if (!top) return;
+    setBackStack(st.slice(0, -1));
+    goTo(top);
+  }, [goTo]);
+
+  // Links: hover for a preview (mouse), click / tap to pin it.
+  const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const overCard = useRef(false);
+  const touchRef = useRef(touch);
+  touchRef.current = touch;
+  const onLink = useCallback(
+    (link: PdfLink, rect: DOMRect, kind: 'enter' | 'leave' | 'click') => {
+      const d = docRef.current;
+      if (!d) return;
+      clearTimeout(hoverTimer.current);
+      if (kind === 'leave') {
+        hoverTimer.current = setTimeout(() => !overCard.current && setLinkPeek((p) => (p && !p.pinned ? null : p)), 220);
+        return;
+      }
+      if (link.url) {
+        if (kind === 'click') openExternal(link.url);
+        return;
+      }
+      const show = (pinned: boolean) =>
+        resolveDest(d, link.dest).then((target) => target && setLinkPeek((p) => (p?.pinned && !pinned ? p : { target, anchor: rect, pinned })));
+      if (kind === 'click') show(true);
+      else if (!touchRef.current) hoverTimer.current = setTimeout(() => show(false), 380);
+    },
+    [],
+  );
+  const goToTarget = useCallback(
+    (t: DestTarget) => {
+      setLinkPeek(null);
+      jumpAway(t.page, t.y);
+    },
+    [jumpAway],
+  );
+
+  // Notes peek: find the notes section once, in the background, and remember it with the document.
+  const notesIndex = state?.notesIndex;
+  const needsAnalysis = !!doc && !!state && notesIndex === undefined;
+  useEffect(() => {
+    if (!needsAnalysis || !doc) return;
+    let stale = false;
+    analyzeNotes(doc, () => stale).then((index) => {
+      if (!stale) setState((s) => (s ? { ...s, notesIndex: index } : s));
+    });
+    return () => {
+      stale = true;
+    };
+  }, [needsAnalysis, doc]);
+  const notesHere = useMemo(() => (notesIndex ? notesFor(notesIndex, current) : []), [notesIndex, current]);
+  useEffect(() => {
+    if (!notesHere.length) setNotesPeekOpen(false);
+  }, [notesHere.length]);
+
   /* ----------------------------- Keyboard ------------------------------ */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -592,6 +681,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         setSearchFocus((n) => n + 1);
         return;
       }
+      if (e.altKey && e.key === 'ArrowLeft' && !typing) return e.preventDefault(), goBack();
       if (mod && (e.key === '=' || e.key === '+')) return e.preventDefault(), zoomIn();
       if (mod && e.key === '-') return e.preventDefault(), zoomOut();
       if (mod && e.key === '0') return e.preventDefault(), applyZoom('fit-width');
@@ -631,6 +721,9 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         case 'b':
           toggleBookmark(current);
           break;
+        case 'f':
+          if (notesHere.length) setNotesPeekOpen((o) => !o);
+          break;
         case 'n':
           setRightOpen((o) => !o);
           break;
@@ -650,7 +743,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [zoomIn, zoomOut, applyZoom, rotateAll, createHighlight, lastColor, goTo, current, sizes.length, pop, sel, go, toggleBookmark]);
+  }, [zoomIn, zoomOut, applyZoom, rotateAll, createHighlight, lastColor, goTo, current, sizes.length, pop, sel, go, toggleBookmark, notesHere.length, goBack]);
 
   /* ------------------------------ Export ------------------------------- */
   const exportNotes = () => {
@@ -691,6 +784,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
       [...bookmarks].sort((a, b) => a - b).forEach((b) => items.push({ id: 'pdf-bm-' + b, title: `Bookmark: page ${b}`, group, keywords: 'bookmarks', run: () => goTo(b) }));
       items.push(
         { id: 'pdf-bm-toggle', title: bookmarks.includes(current) ? 'Remove bookmark from this page' : 'Bookmark this page', hint: 'B', group, run: () => toggleBookmark(current) },
+        ...(notesHere.length ? [{ id: 'pdf-notes-peek', title: 'Show the notes for this page', hint: 'F', group, keywords: 'endnotes references footnotes', run: () => setNotesPeekOpen(true) }] : []),
         { id: 'pdf-search', title: 'Search in this PDF', hint: 'Ctrl F', group, keywords: 'find', run: () => (setLeftOpen(true), setSideTab('search'), setSearchFocus((x) => x + 1)) },
         { id: 'pdf-notes', title: 'Show or hide notes', hint: 'N', group, keywords: 'highlights panel', run: () => setRightOpen((o) => !o) },
         { id: 'pdf-export', title: 'Export PDF with highlights', group, keywords: 'save annotations download', run: exportPdf },
@@ -698,7 +792,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
       );
       return items;
     },
-    [pageTotal, bookmarks, current, goTo, toggleBookmark, exportPdf, rotateAll],
+    [pageTotal, bookmarks, current, goTo, toggleBookmark, exportPdf, rotateAll, notesHere.length],
   );
   usePaletteProvider('pdf', paletteProvider);
 
@@ -895,6 +989,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
               animate={settings.pageTurn}
               pageFilter={settings.pageFilter}
               bookmarks={bookmarks}
+              onLink={onLink}
               initialPage={restored.current ? current : (meta?.lastPage ?? 1)}
               onPage={onSpreadPage}
             />
@@ -914,6 +1009,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
                   flashId={flash}
                   search={sideTab === 'search' && leftOpen ? query : ''}
                   bookmarked={bookmarks.includes(i + 1)}
+                  onLink={onLink}
                 />
               ))}
             </div>
@@ -945,6 +1041,41 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
           />
         )}
       </div>
+
+      {doc && linkPeek && (
+        <LinkPreview
+          doc={doc}
+          peek={linkPeek}
+          onGo={goToTarget}
+          onClose={() => setLinkPeek(null)}
+          onHoverChange={(inside) => {
+            overCard.current = inside;
+            if (!inside && !linkPeek.pinned) setLinkPeek(null);
+          }}
+        />
+      )}
+
+      {notesHere.length > 0 && !notesPeekOpen && !chromeHidden && (
+        <button className="notes-chip" onClick={() => setNotesPeekOpen(true)} aria-label="Show the notes for this page">
+          <NotebookText size={15} /> Notes <span className="kbd">F</span>
+        </button>
+      )}
+      {doc && notesPeekOpen && notesHere.length > 0 && notesIndex && (
+        <NotesPeek
+          doc={doc}
+          entries={notesHere}
+          printed={printedPage(notesIndex, current)}
+          onOpen={(page) => {
+            setNotesPeekOpen(false);
+            jumpAway(page);
+          }}
+          onClose={() => setNotesPeekOpen(false)}
+        />
+      )}
+
+      {backStack.length > 0 && backStack[backStack.length - 1] !== current && (
+        <BackChip page={backStack[backStack.length - 1]} onBack={goBack} onDismiss={() => setBackStack([])} />
+      )}
 
       {chromeHidden && numPages > 0 && (
         <div className="float-page">

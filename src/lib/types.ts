@@ -52,6 +52,8 @@ export interface PdfState {
   rotation: number;
   bookmarks?: number[]; // bookmarked page numbers
   zoom?: number | 'fit-width' | 'fit-page';
+  /** Where the notes are (found once, in the background). null = looked, there's no notes section. */
+  notesIndex?: import('./references').NotesIndex | null;
 }
 
 export const HIGHLIGHT_COLORS: { id: HighlightColor; label: string }[] = [

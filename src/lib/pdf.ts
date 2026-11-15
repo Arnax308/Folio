@@ -6,6 +6,16 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 export { pdfjs };
 export type PDFDoc = pdfjs.PDFDocumentProxy;
 
+const pageCache = new WeakMap<PDFDoc, Map<number, Promise<pdfjs.PDFPageProxy>>>();
+/** One PDFPageProxy per page, shared by everything that draws or reads it. */
+export function getPage(doc: PDFDoc, n: number) {
+  let m = pageCache.get(doc);
+  if (!m) pageCache.set(doc, (m = new Map()));
+  let p = m.get(n);
+  if (!p) m.set(n, (p = doc.getPage(n)));
+  return p;
+}
+
 export async function loadPdf(data: ArrayBuffer | Uint8Array) {
   return pdfjs.getDocument({ data, isEvalSupported: false }).promise;
 }
