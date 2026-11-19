@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { isActive, pagesDone, pagesToDo, useConvertJob } from '../lib/convert/job';
 import {
   Archive, ArchiveRestore, BookOpen, Ellipsis, Menu, FileText, Hash, Library as LibraryIcon, PenLine, Plus, Search, Trash, Upload, ArrowUpRight, Pencil,
 } from 'lucide-react';
@@ -402,10 +403,13 @@ function DocCard({ doc, index, onOpen, onChanged, go }: { doc: DocMeta; index: n
   }, []);
   useDismiss(menu, close, refs);
 
+  const job = useConvertJob(doc.kind === 'pdf' ? doc.id : undefined);
   const meta =
     doc.kind === 'pdf'
-      ? `${doc.pageCount ?? '?'} pages`
-      : `${doc.words ?? 0} words`;
+      ? job && isActive(job)
+        ? `Reading edition ${Math.round((pagesDone(job) / Math.max(1, pagesToDo(job))) * 100)}%`
+        : `${doc.pageCount ?? '?'} pages`
+      : `${doc.sourcePdf ? 'Reading edition · ' : ''}${(doc.words ?? 0).toLocaleString()} words`;
 
   return (
     <div className="card doc-card" style={{ animationDelay: Math.min(index, 12) * 25 + 'ms' }}>

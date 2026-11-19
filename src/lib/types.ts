@@ -14,6 +14,8 @@ export interface DocMeta {
   words?: number;
   cover?: string; // data URL thumbnail
   sourcePath?: string; // desktop: the file on disk this document came from
+  editionId?: string; // PDF: its converted reading edition (a Markdown document)
+  sourcePdf?: string; // reading edition: the PDF it was made from
 }
 
 export interface NRect { x: number; y: number; w: number; h: number } // normalised 0..1, unrotated page space

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowLeft, Download, List, PenLine, Search, StickyNote } from 'lucide-react';
+import { ArrowLeft, Download, FileText, List, PenLine, Search, StickyNote } from 'lucide-react';
 import type { Route } from '../../App';
-import { getDoc, getMarkdown, getMdState, patchDoc, saveMdState, uid } from '../../lib/db';
-import { wordCount, type TocItem } from '../../lib/markdown';
+import { getDoc, getMarkdown, getMdState, patchDoc, saveMarkdown, saveMdState, uid } from '../../lib/db';
+import { toggleTaskAt, wordCount, type TocItem } from '../../lib/markdown';
+import { baseName, isDesktop, writeTextFile } from '../../lib/desktop';
 import { CONTEXT, indexText, locate, rangeToOffsets, unwrapAll, wrapOffsets } from '../../lib/mdAnchor';
 import { useSettings, useTouchUI } from '../../lib/settings';
 import { isInteractive } from '../../lib/gestures';
@@ -13,6 +14,7 @@ import { DisplayMenu } from '../ui/DisplayMenu';
 import { download, toast } from '../ui/ui';
 import { HighlightPopover, highlightsToMarkdown, NotesPanel, SelectionToolbar } from '../pdf/Annotations';
 import { MarkdownView } from './MarkdownView';
+import { BackChip } from '../pdf/RefUI';
 
 const MARK = 'mark.md-hl';
 const mdSort = (h: MdHighlight) => h.start;
@@ -40,6 +42,8 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
   const article = useRef<HTMLDivElement>(null);
   const restored = useRef(false);
   const selRange = useRef<Range | null>(null);
+  // following a note or an in-document link leaves a way back
+  const [backTop, setBackTop] = useState<number | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -90,6 +94,52 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
     if (article.current) decorate(article.current);
   }, [hls, pop?.id, flash, decorate]);
 
+  const jumpedAt = useRef(0);
+  const onJump = useCallback(() => {
+    jumpedAt.current = performance.now();
+    if (scroller.current) setBackTop(scroller.current.scrollTop);
+  }, []);
+  const goBack = () => {
+    if (backTop === null || !scroller.current) return;
+    jumpedAt.current = performance.now();
+    scroller.current.scrollTo({ top: backTop, behavior: 'smooth' });
+    setBackTop(null);
+  };
+
+  // a reading edition remembers the PDF it came from: open it at the page you're reading
+  const openOriginal = useCallback(async () => {
+    if (!meta?.sourcePdf || !article.current || !scroller.current) return;
+    const line = scroller.current.getBoundingClientRect().top + 80;
+    let page: number | null = null;
+    article.current.querySelectorAll<HTMLElement>('.pg[data-page]').forEach((el) => {
+      if (el.getBoundingClientRect().top <= line || page === null) page = Number(el.dataset.page);
+    });
+    const pdf = await getDoc(meta.sourcePdf);
+    if (!pdf) return toast('The original PDF is no longer in your library');
+    if (page) await patchDoc(pdf.id, { lastPage: page });
+    go({ view: 'pdf', id: pdf.id });
+  }, [meta, go]);
+
+  // ticking a checkbox: write [x] / [ ] into the document (and its file on disk, if it has one)
+  const onToggleTask = useCallback(
+    async (line: number, checked: boolean, col?: number) => {
+      if (text === null) return;
+      const next = toggleTaskAt(text, line, checked, col);
+      if (next === null) return;
+      setText(next);
+      await saveMarkdown(id, next);
+      await patchDoc(id, { updatedAt: Date.now() });
+      if (isDesktop && meta?.sourcePath) {
+        try {
+          await writeTextFile(meta.sourcePath, next);
+        } catch {
+          toast('Couldn’t write to ' + baseName(meta.sourcePath));
+        }
+      }
+    },
+    [text, id, meta?.sourcePath],
+  );
+
   /* ------------------------- Reading position ------------------------- */
   useEffect(() => {
     if (restored.current || text === null || !meta || !scroller.current) return;
@@ -111,6 +161,7 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
     if (!sc) return;
     const max = sc.scrollHeight - sc.clientHeight;
     setProgress(max > 0 ? sc.scrollTop / max : 1);
+    setBackTop((b) => (b !== null && Math.abs(sc.scrollTop - b) < 40 && performance.now() - jumpedAt.current > 900 ? null : b));
     if (selRange.current) setSel(selRange.current.getBoundingClientRect());
     const heads = article.current?.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id]');
     if (!heads) return;
@@ -249,10 +300,11 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
         hint: 'H' + t.level,
         run: () => article.current?.querySelector(`[id="${CSS.escape(t.id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
       })),
+      ...(meta?.sourcePdf ? [{ id: 'md-original', title: 'Open the original PDF at this page', group: 'This document', keywords: 'scan source', run: openOriginal }] : []),
       { id: 'md-edit', title: 'Edit this document', hint: 'E', group: 'This document', run: () => go({ view: 'edit', id }) },
       { id: 'md-notes', title: 'Show or hide notes', hint: 'N', group: 'This document', keywords: 'highlights panel', run: () => setNotesOpen((o) => !o) },
     ],
-    [toc, go, id],
+    [toc, go, id, meta?.sourcePdf, openOriginal],
   );
   usePaletteProvider('md', paletteProvider);
 
@@ -282,6 +334,11 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
           {touch && (
             <button className="icon-btn" aria-label="Search and go to" onClick={openPalette}>
               <Search size={17} />
+            </button>
+          )}
+          {meta?.sourcePdf && (
+            <button className="icon-btn" data-tip="Original PDF, this page" aria-label="Open the original PDF at this page" onClick={openOriginal}>
+              <FileText size={17} />
             </button>
           )}
           <button className="icon-btn" data-tip="Download .md" aria-label="Download" onClick={() => meta && text !== null && download(meta.name + '.md', text)}>
@@ -334,7 +391,7 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
           {text !== null && hls && (
             <div className="md-page fade-in" style={{ '--measure': s.mdWidth + 'ch' } as React.CSSProperties} onClick={onArticleClick}>
               <div className="md-meta">
-                <span className="kind-pill">Markdown</span>
+                <span className="kind-pill">{meta?.sourcePdf ? 'Reading edition' : 'Markdown'}</span>
                 <span>{words.toLocaleString()} words</span>
                 <span className="dot" />
                 <span>{minutes} min</span>
@@ -344,6 +401,8 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
                 source={text}
                 onToc={setToc}
                 decorate={decorate}
+                onJump={onJump}
+                onToggleTask={onToggleTask}
                 className={s.mdFont === 'serif' ? 'serif' : 'sans'}
                 style={{ fontSize: s.mdSize }}
               />
@@ -379,6 +438,8 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
           />
         )}
       </div>
+
+      {backTop !== null && <BackChip label="Back to where you were" onBack={goBack} onDismiss={() => setBackTop(null)} />}
 
       {sel && (
         <SelectionToolbar

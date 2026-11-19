@@ -8,3 +8,7 @@ public/test-fixtures
 *.jks
 keystore.properties
 Folio-*-android.apk
+
+# Local secrets (API keys for development)
+*.local
+.env

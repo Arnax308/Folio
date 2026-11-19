@@ -39,6 +39,22 @@ export async function takePendingFiles(): Promise<OpenedFile[]> {
 
 /** Called when a second launch hands its file to this window. */
 export async function onOpenRequest(cb: () => void): Promise<() => void> {
+  if (isTauri && isAndroid) {
+    // Android: "Open with" / "Share" brings Folio to the front while the file is copied in the
+    // background, so look a few times whenever the app becomes visible (and just after launch).
+    let timers: number[] = [];
+    const look = () => {
+      timers.forEach(clearTimeout);
+      timers = [700, 1800, 4000, 8000].map((ms) => window.setTimeout(cb, ms));
+    };
+    const onVisible = () => document.visibilityState === 'visible' && (cb(), look());
+    document.addEventListener('visibilitychange', onVisible);
+    look();
+    return () => {
+      timers.forEach(clearTimeout);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }
   if (!isDesktop) return () => {};
   const { listen } = await import('@tauri-apps/api/event');
   return listen('folio-open', cb);

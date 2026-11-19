@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Bookmark, BookOpen, Check, Ellipsis, FileDown, NotebookText, Search, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine,
+  ArrowLeft, Bookmark, BookOpen, Check, Ellipsis, FileDown, NotebookText, Search, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine, BookText, Hand
 } from 'lucide-react';
 import type { Route } from '../../App';
 import { getDoc, getPdfBlob, getPdfState, patchDoc, savePdfState, uid } from '../../lib/db';
 import { clientRectToNorm, loadPdf, mergeRects, pointToNorm, type PDFDoc } from '../../lib/pdf';
 import { updateSettings, useSettings, useTouchUI } from '../../lib/settings';
 import { isInteractive, usePinch } from '../../lib/gestures';
+import { useHandPan } from '../../lib/handPan';
 import { toolsFor } from '../../lib/renderQueue';
 import { analyzeNotes, notesFor, printedPage, resolveDest, type DestTarget, type PdfLink } from '../../lib/references';
 import { openExternal } from '../../lib/desktop';
@@ -20,6 +21,8 @@ import { download, PopoverButton, toast } from '../ui/ui';
 import { PageView, type PageSize } from './PageView';
 import { Sidebar, type SideTab } from './Sidebar';
 import { HighlightPopover, highlightsToMarkdown, NotesPanel, SelectionToolbar } from './Annotations';
+import { ConvertDialog, ProgressRing } from './ConvertDialog';
+import { isActive, loadConvertJob, pagesDone, pagesToDo, useConvertJob } from '../../lib/convert/job';
 
 type Zoom = number | 'fit-width' | 'fit-page';
 const STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
@@ -45,6 +48,17 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   // On touch the panels are drawers over the page, so start with the page alone.
   const [leftOpen, setLeftOpen] = useState(() => window.innerWidth > 1180 && !touch);
   const [rightOpen, setRightOpen] = useState(false);
+  // hand tool: drag the pages around with the mouse (the middle button always does)
+  const [hand, setHand] = useState(() => localStorage.getItem('folio.hand') === '1');
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useHandPan(bodyRef, hand);
+  useEffect(() => {
+    try {
+      localStorage.setItem('folio.hand', hand ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [hand]);
   const [chromeHidden, setChromeHidden] = useState(false);
   const [linkPeek, setLinkPeek] = useState<LinkPeek | null>(null);
   const [notesPeekOpen, setNotesPeekOpen] = useState(false);
@@ -730,6 +744,9 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         case 'h':
           if (selRange.current) createHighlight(lastColor);
           break;
+        case 'g':
+          setHand((v) => !v);
+          break;
         case 'j':
           goTo(Math.min(current + 1, sizes.length));
           break;
@@ -771,6 +788,31 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     }
   }, [meta, state, doc, id]);
 
+  /* -------------------------- Reading edition -------------------------- */
+  const job = useConvertJob(id);
+  const [convertOpen, setConvertOpen] = useState(false);
+  useEffect(() => {
+    loadConvertJob(id);
+  }, [id]);
+  const converting = isActive(job);
+  const convertFrac = job && converting ? pagesDone(job) / Math.max(1, pagesToDo(job)) : 0;
+  const editionId = job?.status === 'done' ? job.editionId : meta?.editionId;
+  // when a conversion finishes while you're here, say so
+  const prevStatus = useRef(job?.status);
+  useEffect(() => {
+    if (prevStatus.current && prevStatus.current !== 'done' && job?.status === 'done' && !convertOpen) toast('Your reading edition is ready');
+    prevStatus.current = job?.status;
+  }, [job?.status, convertOpen]);
+  const openEdition = useCallback(
+    async (eid: string) => {
+      if (await getDoc(eid)) return go({ view: 'md', id: eid });
+      // the edition was removed from the library
+      setMeta(await patchDoc(id, { editionId: undefined }) ?? null);
+      setConvertOpen(true);
+    },
+    [go, id],
+  );
+
   /* -------------------------- Command palette -------------------------- */
   const pageTotal = sizes.length;
   const paletteProvider = useCallback(
@@ -788,11 +830,16 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         { id: 'pdf-search', title: 'Search in this PDF', hint: 'Ctrl F', group, keywords: 'find', run: () => (setLeftOpen(true), setSideTab('search'), setSearchFocus((x) => x + 1)) },
         { id: 'pdf-notes', title: 'Show or hide notes', hint: 'N', group, keywords: 'highlights panel', run: () => setRightOpen((o) => !o) },
         { id: 'pdf-export', title: 'Export PDF with highlights', group, keywords: 'save annotations download', run: exportPdf },
+        ...(editionId && !converting
+          ? [{ id: 'pdf-edition-open', title: 'Open the reading edition', group, keywords: 'reflow ebook text convert', run: () => openEdition(editionId) }]
+          : []),
+        { id: 'pdf-edition', title: converting ? 'Reading edition: show progress' : editionId ? 'Make the reading edition again' : 'Make a reading edition', group, keywords: 'convert reflow ebook text ocr groq notes links', run: () => setConvertOpen(true) },
         { id: 'pdf-rotate', title: 'Rotate pages clockwise', hint: 'R', group, run: () => rotateAll(90) },
+        { id: 'pdf-hand', title: hand ? 'Turn off the hand tool' : 'Hand tool: drag to move around', hint: 'G', group, keywords: 'pan grab drag move scroll', run: () => setHand((v) => !v) },
       );
       return items;
     },
-    [pageTotal, bookmarks, current, goTo, toggleBookmark, exportPdf, rotateAll, notesHere.length],
+    [pageTotal, bookmarks, current, goTo, toggleBookmark, exportPdf, rotateAll, notesHere.length, editionId, converting, openEdition, hand],
   );
   usePaletteProvider('pdf', paletteProvider);
 
@@ -802,7 +849,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   const numPages = sizes.length;
 
   return (
-    <div className={`reader pdf-reader filter-${settings.pageFilter}${chromeHidden ? ' chrome-hidden' : ''}`}>
+    <div className={`reader pdf-reader filter-${settings.pageFilter}${chromeHidden ? ' chrome-hidden' : ''}${hand && !touch ? ' hand-mode' : ''}`}>
       <header className="reader-bar">
         <div className="bar-left">
           <button className="icon-btn" data-tip="Library" aria-label="Back to library" onClick={() => go({ view: 'library' })}>
@@ -863,6 +910,15 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
               <ZoomIn size={17} />
             </button>
           </div>
+          <button
+            className={'icon-btn' + (hand ? ' active' : '')}
+            data-tip={hand ? 'Hand tool on  G (middle-drag always pans)' : 'Hand tool  G'}
+            aria-label="Hand tool"
+            aria-pressed={hand}
+            onClick={() => setHand((v) => !v)}
+          >
+            <Hand size={17} />
+          </button>
           <span className="divider-v" />
           <button className="icon-btn" data-tip="Rotate left  ⇧R" aria-label="Rotate left" onClick={() => rotateAll(-90)}>
             <RotateCcw size={17} />
@@ -880,6 +936,15 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
             onClick={() => toggleBookmark(current)}
           >
             <Bookmark size={17} fill={bookmarks.includes(current) ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            className={'icon-btn convert-btn' + (converting ? ' busy' : '')}
+            data-tip={converting ? `Reading edition · ${Math.round(convertFrac * 100)}%` : editionId ? 'Reading edition' : 'Make a reading edition'}
+            aria-label="Reading edition"
+            onClick={() => (editionId && !converting && job?.status !== 'error' && job?.status !== 'paused' ? openEdition(editionId) : setConvertOpen(true))}
+            onContextMenu={(e) => (e.preventDefault(), setConvertOpen(true))}
+          >
+            {converting ? <ProgressRing frac={convertFrac} /> : <BookText size={17} />}
           </button>
           <DisplayMenu mode="pdf" />
           <button className={'icon-btn' + (rightOpen ? ' active' : '')} data-tip="Notes  N" aria-label="Toggle notes" onClick={() => setRightOpen((o) => !o)}>
@@ -919,6 +984,9 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
                   <button className="menu-item" onClick={() => (close(), exportPdf())}>
                     <FileDown size={16} /> Export PDF with highlights
                   </button>
+                  <button className="menu-item" onClick={() => (close(), setConvertOpen(true))}>
+                    <BookText size={16} /> {converting ? 'Reading edition · ' + Math.round(convertFrac * 100) + '%' : editionId ? 'Reading edition…' : 'Make a reading edition'}
+                  </button>
                 </>
               )}
             </PopoverButton>
@@ -929,7 +997,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         </div>
       </header>
 
-      <div className="reader-body">
+      <div className="reader-body" ref={bodyRef}>
         {leftOpen && doc && (
           <Sidebar
             doc={doc}
@@ -1074,7 +1142,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
       )}
 
       {backStack.length > 0 && backStack[backStack.length - 1] !== current && (
-        <BackChip page={backStack[backStack.length - 1]} onBack={goBack} onDismiss={() => setBackStack([])} />
+        <BackChip label={`Back to page ${backStack[backStack.length - 1]}`} onBack={goBack} onDismiss={() => setBackStack([])} />
       )}
 
       {chromeHidden && numPages > 0 && (
@@ -1087,6 +1155,16 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         navigator.clipboard.writeText(window.getSelection()?.toString() ?? '');
         toast('Copied');
       }} />}
+
+      {convertOpen && (
+        <ConvertDialog
+          pdfId={id}
+          pages={numPages || meta?.pageCount || 0}
+          job={job}
+          onOpenEdition={(eid) => (setConvertOpen(false), openEdition(eid))}
+          onClose={() => setConvertOpen(false)}
+        />
+      )}
 
       {pop && popHl && (
         <HighlightPopover

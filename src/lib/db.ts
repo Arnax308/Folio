@@ -33,6 +33,7 @@ export async function deleteDoc(id: string) {
   await saveDocs((await listDocs()).filter((d) => d.id !== id));
   await del('file:' + id, store);
   await del('state:' + id, store);
+  await del('convert:' + id, store);
 }
 
 export const getPdfBlob = (id: string) => get<Blob>('file:' + id, store);
@@ -57,3 +58,8 @@ export const setRawState = (id: string, s: unknown) => set('state:' + id, s, sto
 
 export const getFlag =(k: string) => get<boolean>('flag:' + k, store);
 export const setFlag = (k: string) => set('flag:' + k, true, store);
+
+// Reading-edition conversions in progress (or finished), per PDF.
+export const getConvertJob = <T>(pdfId: string) => get<T>('convert:' + pdfId, store);
+export const saveConvertJob = <T>(pdfId: string, job: T) => set('convert:' + pdfId, job, store);
+export const deleteConvertJob = (pdfId: string) => del('convert:' + pdfId, store);

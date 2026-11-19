@@ -233,32 +233,52 @@
   padding-left: 0.2em;
 }
 .prose .task-list-item {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6em;
+  /* the box hangs in the gutter, so the text wraps and flows like any other paragraph */
+  position: relative;
+  padding-left: 1.65em;
 }
-.prose .task-list-item label {
-  display: contents;
-}
-.prose .task-list-item input {
+.prose .task-list-item-checkbox {
   appearance: none;
-  flex: none;
-  width: 1em;
-  height: 1em;
+  position: absolute;
+  left: 0.05em;
+  top: 0.36em;
+  width: 1.05em;
+  height: 1.05em;
   margin: 0;
-  translate: 0 0.14em;
   border-radius: 5px;
   box-shadow: inset 0 0 0 1.5px var(--ink-4);
   background: var(--surface);
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease), box-shadow 0.15s var(--ease), transform 0.12s var(--ease);
 }
-.prose .task-list-item input:checked {
+.prose .task-list-item-checkbox:hover {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.prose .task-list-item-checkbox:active {
+  transform: scale(0.88);
+}
+.prose .task-list-item-checkbox:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.prose .task-list-item-checkbox:checked {
   background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 80% no-repeat;
   box-shadow: none;
 }
-.prose .task-list-item:has(input:checked) {
+/* done: dimmed; struck through too unless it holds sub-tasks (a strike can't be undone below it) */
+.prose .task-list-item:has(> input:checked),
+.prose .task-list-item:has(> p:first-child > input:checked) {
   color: var(--ink-3);
+}
+.prose .task-list-item:has(> input:checked):not(:has(ul, ol)),
+.prose .task-list-item:has(> p:first-child > input:checked):not(:has(ul, ol)) {
   text-decoration: line-through;
   text-decoration-color: var(--ink-4);
+}
+.prose .task-list-item > .contains-task-list,
+.prose .task-list-item > ul,
+.prose .task-list-item > ol {
+  margin-top: 0.3em;
 }
 .prose blockquote {
   margin: 1.5em 0;
@@ -646,4 +666,24 @@
 }
 .note-card.detached .note-quote {
   opacity: 0.6;
+}
+
+/* checkboxes in table cells (a Folio extension): sit in the cell, and a done row is dimmed */
+.prose td .table-task,
+.prose th .table-task {
+  position: static;
+  display: inline-block;
+  vertical-align: -0.16em;
+}
+.prose td:has(> .table-task:only-child),
+.prose th:has(> .table-task:only-child) {
+  width: 1%;
+  text-align: center;
+}
+.prose tr:has(> td > .table-task:checked) > td {
+  color: var(--ink-3);
+}
+.prose tr:has(> td > .table-task:checked) > td:not(:has(> .table-task)) {
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-4);
 }

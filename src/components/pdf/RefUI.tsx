@@ -204,11 +204,11 @@ export function NotesPeek({
 }
 
 /* --------------------------------- Back chip -------------------------------- */
-export function BackChip({ page, onBack, onDismiss }: { page: number; onBack: () => void; onDismiss: () => void }) {
+export function BackChip({ label, onBack, onDismiss }: { label: string; onBack: () => void; onDismiss: () => void }) {
   return (
     <div className="back-chip">
       <button className="back-chip-main" onClick={onBack}>
-        <ArrowLeft size={15} /> Back to page {page}
+        <ArrowLeft size={15} /> {label}
       </button>
       <button className="back-chip-x" aria-label="Dismiss" onClick={onDismiss}>
         <X size={13} />

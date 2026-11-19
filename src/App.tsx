@@ -8,6 +8,8 @@ import { CommandPalette } from './components/ui/CommandPalette';
 import { TitleBar } from './components/ui/TitleBar';
 import { useApplyTheme } from './lib/settings';
 import { importFiles } from './lib/importer';
+import { listDocs } from './lib/db';
+import { resumeConversions } from './lib/convert/job';
 import { isDesktop, onOpenRequest, takePendingFiles } from './lib/desktop';
 
 export type Route =
@@ -39,22 +41,34 @@ export default function App() {
     location.hash = r.view === 'library' ? '' : `/${r.view}/${r.id}`;
   }, []);
 
+  // Carry on with reading editions that were being made when Folio was last closed.
+  useEffect(() => {
+    listDocs().then((docs) => resumeConversions(docs.filter((d) => d.kind === 'pdf').map((d) => d.id)));
+  }, []);
+
   // Development only: lets automated checks import a file without the file picker.
   useEffect(() => {
     if (import.meta.env.DEV) (window as unknown as { folioImport: unknown }).folioImport = importFiles;
   }, []);
 
-  // Desktop: open files handed to Folio by Explorer, at launch or while it is already running.
+  // Open files handed to Folio (Explorer on Windows, "Open with" / "Share" on Android), at launch
+  // or while it is already running.
   useEffect(() => {
+    let busy = false;
     const openPending = async () => {
+      if (busy) return;
+      busy = true;
       try {
         const opened = await takePendingFiles();
         if (!opened.length) return;
-        const docs = await importFiles(opened.map((o) => o.file), opened.map((o) => o.path));
+        // Android hands over a temporary copy, so there's no file on disk to save back to
+        const docs = await importFiles(opened.map((o) => o.file), isDesktop ? opened.map((o) => o.path) : undefined);
         const d = docs[docs.length - 1];
         if (d) go({ view: d.kind, id: d.id });
       } catch (e) {
         console.warn('Could not open file', e);
+      } finally {
+        busy = false;
       }
     };
     openPending();

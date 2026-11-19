@@ -37,15 +37,51 @@ fn files_from_args<I: IntoIterator<Item = String>>(args: I, cwd: Option<&Path>) 
         .collect()
 }
 
+/// Android: where MainActivity copies documents from "Open with" / "Share" (cache/folio-incoming,
+/// one folder per document). Several spellings of the app's cache folder, as Android has aliases.
+#[cfg(mobile)]
+fn incoming_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(cache) = app.path().app_cache_dir() {
+        dirs.push(cache.join("folio-incoming"));
+    }
+    let id = &app.config().identifier;
+    dirs.push(PathBuf::from(format!("/data/user/0/{id}/cache/folio-incoming")));
+    dirs.push(PathBuf::from(format!("/data/data/{id}/cache/folio-incoming")));
+    dirs
+}
+
 #[tauri::command]
-fn take_pending(state: tauri::State<Pending>) -> Vec<String> {
-    match state.0.lock() {
+fn take_pending(app: AppHandle, state: tauri::State<Pending>) -> Vec<String> {
+    #[cfg_attr(desktop, allow(unused_mut))]
+    let mut out: Vec<String> = match state.0.lock() {
         Ok(mut files) => files
             .drain(..)
             .map(|p| p.to_string_lossy().into_owned())
             .collect(),
         Err(_) => Vec::new(),
+    };
+    #[cfg(mobile)]
+    {
+        let mut seen = std::collections::HashSet::new();
+        for dir in incoming_dirs(&app) {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                // only finished copies: a folder holding the document ("….part" files are still arriving)
+                let Ok(inner) = std::fs::read_dir(entry.path()) else { continue };
+                for file in inner.flatten() {
+                    let p = file.path();
+                    let key = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+                    if p.is_file() && has_ext(&p, &DOC_EXTS) && seen.insert(key) {
+                        out.push(p.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
     }
+    #[cfg(desktop)]
+    let _ = &app;
+    out
 }
 
 /// Reads a document Folio was asked to open. Only PDF, Markdown and text files.
@@ -55,7 +91,15 @@ fn read_file(path: String) -> Result<Response, String> {
     if !has_ext(&path, &DOC_EXTS) {
         return Err("Folio only opens PDF, Markdown and text files".into());
     }
-    std::fs::read(&path).map(Response::new).map_err(|e| e.to_string())
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    // Android: the copy made for "Open with" has done its job once it's in the library
+    if path.to_string_lossy().contains("/folio-incoming/") {
+        let _ = std::fs::remove_file(&path);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+    Ok(Response::new(bytes))
 }
 
 /// Saves a Markdown document back to its file on disk. Only Markdown and text files.

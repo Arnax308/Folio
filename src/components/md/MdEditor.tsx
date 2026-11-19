@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import type { Route } from '../../App';
 import { getDoc, getMarkdown, patchDoc, saveMarkdown } from '../../lib/db';
-import { wordCount } from '../../lib/markdown';
+import { wordCount, toggleTaskAt } from '../../lib/markdown';
 import { useDebounced, useSettings } from '../../lib/settings';
 import type { DocMeta } from '../../lib/types';
 import {
@@ -53,6 +53,22 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
       patchDoc(id, { openedAt: Date.now() });
     })();
   }, [id, go]);
+
+  // A checkbox ticked in the preview: change that line in the editor (or the text, if the editor is hidden)
+  const onToggleTask = useCallback(
+    (line: number, checked: boolean, col?: number) => {
+      const view = viewRef.current;
+      // (in Preview mode the editor is gone, and its old view no longer counts)
+      if (view && view.dom.isConnected && line < view.state.doc.lines) {
+        const l = view.state.doc.line(line + 1);
+        const next = toggleTaskAt(l.text, 0, checked, col);
+        if (next !== null) view.dispatch({ changes: { from: l.from, to: l.to, insert: next } });
+        return;
+      }
+      setText((t) => (t === null ? t : (toggleTaskAt(t, line, checked, col) ?? t)));
+    },
+    [],
+  );
 
   // Autosave
   const firstLoad = useRef(true);
@@ -298,7 +314,7 @@ export default function MdEditor({ id, go }: { id: string; go: (r: Route) => voi
         {mode !== 'write' && (
           <div className="preview-pane" ref={previewScroll}>
             <div className="md-page" style={{ '--measure': s.mdWidth + 'ch' } as React.CSSProperties}>
-              <MarkdownView source={preview} className={s.mdFont === 'serif' ? 'serif' : 'sans'} style={{ fontSize: mode === 'split' ? Math.max(15, s.mdSize - 2) : s.mdSize }} />
+              <MarkdownView source={preview} onToggleTask={onToggleTask} className={s.mdFont === 'serif' ? 'serif' : 'sans'} style={{ fontSize: mode === 'split' ? Math.max(15, s.mdSize - 2) : s.mdSize }} />
             </div>
           </div>
         )}

@@ -1318,3 +1318,21 @@
 .page-skeleton {
   pointer-events: none;
 }
+
+/* Hand tool: grab the page and move it (the text can't be selected meanwhile) */
+.hand-mode .scroller:not(.spread-mode),
+.hand-mode .spread-stage:not(.at-fit) {
+  cursor: grab;
+}
+.hand-mode .scroller:not(.spread-mode) .textLayer,
+.hand-mode .scroller:not(.spread-mode) .textLayer *,
+.hand-mode .spread-stage:not(.at-fit) .textLayer,
+.hand-mode .spread-stage:not(.at-fit) .textLayer * {
+  cursor: inherit;
+  user-select: none;
+}
+.hand-dragging,
+.hand-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}

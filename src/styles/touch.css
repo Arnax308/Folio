@@ -561,3 +561,14 @@
 :root[data-ui='touch'] .pal-foot {
   display: none;
 }
+
+/* Markdown task lists: a box a finger can hit */
+:root[data-ui='touch'] .prose .task-list-item {
+  padding-left: 1.95em;
+}
+:root[data-ui='touch'] .prose .task-list-item-checkbox {
+  width: 1.3em;
+  height: 1.3em;
+  top: 0.24em;
+  border-radius: 6px;
+}

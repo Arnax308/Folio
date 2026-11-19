@@ -84,7 +84,9 @@ function mathPlugin(md: MD) {
 
 function createMd() {
   const md: MD = new MarkdownIt({ html: true, linkify: true, typographer: true });
-  md.use(taskLists, { enabled: false, label: true });
+  // Ticking a box writes [x] back into the text (toggleTaskAt). No <label> around the text:
+  // selecting a task's words to highlight them mustn't tick it.
+  md.use(taskLists, { enabled: true });
   md.use(footnote);
   md.use(mathPlugin);
 
@@ -127,8 +129,28 @@ export function renderMarkdown(src: string): { html: string; toc: TocItem[] } {
   const tokens = md.parse(src, env);
   const toc: TocItem[] = [];
   const used = new Map<string, number>();
+  let row: number | null = null; // source line of the table row we're in
+  let col = -1;
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
+    // remember where each list item starts, so a ticked checkbox can find its line in the source
+    if (t.type === 'list_item_open' && t.map) t.attrSet('data-line', String(t.map[0]));
+    // A table cell holding only [ ] or [x] is a checkbox too (Folio's own extension: Markdown
+    // only has them in lists). It knows its row's line and its column, to write the tick back.
+    if (t.type === 'tr_open') {
+      row = t.map ? t.map[0] : null;
+      col = -1;
+    }
+    if (t.type === 'td_open' || t.type === 'th_open') col++;
+    if (t.type === 'inline' && row !== null && (tokens[i - 1]?.type === 'td_open' || tokens[i - 1]?.type === 'th_open')) {
+      const m = /^\[([ xX])\]$/.exec(t.content.trim());
+      const first = t.children?.[0];
+      if (m && first) {
+        first.type = 'html_inline';
+        first.content = `<input class="task-list-item-checkbox table-task" type="checkbox" data-line="${row}" data-col="${col}"${m[1] === ' ' ? '' : ' checked'}>`;
+        t.children = [first];
+      }
+    }
     if (t.type === 'heading_open') {
       const inline = tokens[i + 1];
       const text = inline.children?.filter((c) => c.type === 'text' || c.type === 'code_inline').map((c) => c.content).join('') ?? inline.content;
@@ -144,6 +166,41 @@ export function renderMarkdown(src: string): { html: string; toc: TocItem[] } {
   const raw = md.renderer.render(tokens, md.options, env);
   const html = DOMPurify.sanitize(raw, { ADD_ATTR: ['target'], FORBID_TAGS: ['style'] });
   return { html, toc };
+}
+
+/**
+ * Ticks or unticks the task whose list item starts on `line` (0-based): `- [ ] …`. With `col`, the
+ * checkbox is the `col`-th cell of a table row on that line instead. Null if there's no box there.
+ */
+export function toggleTaskAt(src: string, line: number, checked: boolean, col?: number): string | null {
+  const lines = src.split('\n');
+  const l = lines[line];
+  if (l === undefined) return null;
+  const mark = checked ? '[x]' : '[ ]';
+  if (col !== undefined) {
+    // split the row at its unescaped pipes (outside `code`), keeping the separators' positions
+    const cuts: number[] = [];
+    let code = false;
+    for (let k = 0; k < l.length; k++) {
+      if (l[k] === '\\') k++;
+      else if (l[k] === '`') code = !code;
+      else if (l[k] === '|' && !code) cuts.push(k);
+    }
+    const lead = /^\s*\|/.test(l) ? 1 : 0; // a leading pipe opens the first cell
+    const starts = [lead ? cuts[0] + 1 : 0, ...cuts.slice(lead).map((c) => c + 1)];
+    const start = starts[col];
+    if (start === undefined) return null;
+    const end = cuts.find((c) => c >= start) ?? l.length;
+    const cell = l.slice(start, end);
+    const m = /^(\s*)\[[ xX]\](\s*)$/.exec(cell);
+    if (!m) return null;
+    lines[line] = l.slice(0, start) + m[1] + mark + m[2] + l.slice(end);
+    return lines.join('\n');
+  }
+  const m = /^(\s*(?:>\s*)*(?:[-*+]|\d{1,9}[.)])\s+)\[([ xX])\]/.exec(l);
+  if (!m) return null;
+  lines[line] = m[1] + mark + l.slice(m[0].length);
+  return lines.join('\n');
 }
 
 export function wordCount(src: string) {
