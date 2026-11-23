@@ -1336,3 +1336,421 @@
   cursor: grabbing !important;
   user-select: none !important;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Trimmed margins                                                    */
+/* ------------------------------------------------------------------ */
+.page-crop {
+  position: absolute;
+}
+.page.cropped {
+  overflow: hidden;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pen and highlighter                                                */
+/* ------------------------------------------------------------------ */
+.ink-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ink-markers {
+  z-index: 1;
+  opacity: 0.5;
+  mix-blend-mode: multiply;
+}
+.ink-pens {
+  z-index: 3;
+}
+.filter-night .ink-markers {
+  opacity: 0.4;
+  mix-blend-mode: screen;
+}
+.filter-night .ink-pens {
+  filter: invert(0.9) hue-rotate(180deg);
+}
+/* pen mode: pages take the pointer for drawing, not for selecting text or scrolling */
+.inking .page {
+  touch-action: none;
+  cursor: crosshair;
+}
+.inking.ink-eraser .page {
+  cursor: cell;
+}
+.inking .textLayer {
+  pointer-events: none;
+  user-select: none;
+}
+.inking .link-layer {
+  pointer-events: none;
+}
+.inking-now,
+.inking-now * {
+  user-select: none !important;
+}
+
+.ink-bar {
+  position: absolute;
+  left: 50%;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 16px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: var(--shadow-lg);
+  transform: translateX(-50%);
+  animation: ink-bar-in 0.26s var(--ease);
+}
+@keyframes ink-bar-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+}
+.ink-bar .divider-v {
+  height: 22px;
+  margin: 0 3px;
+}
+.ink-tool {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 11px;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.ink-tool:hover {
+  background: var(--surface-3);
+}
+.ink-tool.on {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.ink-tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: none;
+}
+.ink-color {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  margin: 0 1px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  transition: transform 0.15s var(--ease);
+}
+.ink-color:hover {
+  transform: scale(1.08);
+}
+.ink-color.on::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+}
+.ink-size {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  cursor: pointer;
+}
+.ink-size span {
+  display: block;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+.ink-size.on span {
+  background: var(--accent);
+}
+.ink-size:hover {
+  background: var(--surface-3);
+}
+.ink-done {
+  height: 36px;
+  margin-left: 2px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+:root[data-ui='touch'] .ink-tool {
+  width: 44px;
+  height: 44px;
+}
+:root[data-ui='touch'] .ink-color {
+  width: 30px;
+  height: 30px;
+  margin: 0 3px;
+}
+:root[data-ui='touch'] .ink-size {
+  width: 36px;
+  height: 44px;
+}
+:root[data-ui='touch'] .ink-done {
+  height: 44px;
+  padding: 0 18px;
+}
+@media (max-width: 640px) {
+  .ink-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+    width: calc(100vw - 24px);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Notebook beside the book                                           */
+/* ------------------------------------------------------------------ */
+.notebook {
+  position: relative;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-width: 300px;
+  max-width: 62vw;
+  padding-top: var(--bar-h);
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  animation: panel-in-r 0.28s var(--ease);
+}
+.nb-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  z-index: 2;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.nb-grip::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 3px;
+  height: 36px;
+  border-radius: 3px;
+  background: var(--line-strong);
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 0.15s;
+}
+.nb-grip:hover::after,
+.resizing-x .nb-grip::after {
+  opacity: 1;
+}
+.resizing-x,
+.resizing-x * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+.nb-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 46px;
+  padding: 6px 8px 6px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.nb-icon {
+  flex: none;
+  color: var(--accent-ink);
+}
+.nb-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-saved {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  color: var(--ink-4);
+}
+.nb-saved.saving {
+  color: var(--ink-3);
+}
+.nb-modes button {
+  height: 26px;
+  padding: 0 8px;
+}
+.nb-editor {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.nb-editor .cm-content {
+  max-width: none !important;
+  padding: 18px 22px 30vh !important;
+}
+.nb-editor .cm-editor {
+  font-size: 14px;
+}
+.nb-read {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 24px 30vh;
+}
+.nb-read .prose > :first-child {
+  margin-top: 0;
+}
+.nb-hint {
+  padding: 8px 14px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.nb-hint b {
+  font-weight: 650;
+  color: var(--ink-2);
+}
+.nb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 28px;
+  text-align: center;
+}
+.nb-empty p {
+  max-width: 280px;
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.nb-empty-art {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 4px;
+  border-radius: 15px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.nb-empty-title {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.nb-pick {
+  width: 100%;
+  text-align: left;
+}
+.nb-pick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink-2);
+}
+.nb-pick-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.nb-pick-item:hover {
+  background: var(--surface-3);
+}
+.nb-pick-item span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-pick-meta {
+  font-size: 12px;
+  color: var(--ink-4);
+}
+:root[data-ui='touch'] .nb-head {
+  min-height: 54px;
+}
+:root[data-ui='touch'] .nb-editor .cm-editor {
+  font-size: 16px;
+}
+:root[data-ui='touch'] .nb-pick-item {
+  padding: 14px 12px;
+  font-size: 16px;
+}
+/* phones and narrow windows: the notebook covers the page instead of squeezing it */
+@media (max-width: 760px) {
+  .notebook {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 100% !important;
+    max-width: none;
+    box-shadow: var(--shadow-lg);
+  }
+  .nb-grip {
+    display: none;
+  }
+}
+.nb-read .prose h1 {
+  font-size: 1.55em;
+}
+.nb-read .prose h2 {
+  font-size: 1.3em;
+}
+/* keep the pen bar over the page, not over the notebook beside it */
+.ink-bar {
+  left: calc((100% - var(--nb-w, 0px)) / 2);
+}
+@media (max-width: 760px) {
+  .ink-bar {
+    left: 50%;
+  }
+}

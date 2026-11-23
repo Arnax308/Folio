@@ -5,6 +5,7 @@ import MdReader from './components/md/MdReader';
 import MdEditor from './components/md/MdEditor';
 import { Toasts } from './components/ui/ui';
 import { CommandPalette } from './components/ui/CommandPalette';
+import { DictionaryHost } from './components/ui/Dictionary';
 import { TitleBar } from './components/ui/TitleBar';
 import { useApplyTheme } from './lib/settings';
 import { importFiles } from './lib/importer';
@@ -94,6 +95,7 @@ export default function App() {
         </div>
       </div>
       <CommandPalette go={go} route={route} />
+      <DictionaryHost />
       <Toasts />
     </div>
   );

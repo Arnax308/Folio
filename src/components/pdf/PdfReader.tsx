@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Bookmark, BookOpen, Check, Ellipsis, FileDown, NotebookText, Search, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine, BookText, Hand
+  ArrowLeft, Bookmark, BookOpen, Check, Ellipsis, FileDown, NotebookText, Search, ChevronLeft, ChevronRight, PanelLeft, RotateCcw, RotateCw, StickyNote, ZoomIn, ZoomOut, Maximize2, ScanLine, BookText, Hand,
+  PenTool, NotebookPen, Crop,
 } from 'lucide-react';
+import { loadInkSettings, saveInkSettings, useInk, type InkSettings } from '../../lib/ink';
+import { cropFor, detectTrim } from '../../lib/trim';
+import { isLookupable } from '../../lib/dictionary';
+import { openDictionary } from '../ui/Dictionary';
+import { InkBar } from './InkBar';
+import { Notebook, QUOTE_MIME, quoteMarkdown, type NotebookHandle } from './Notebook';
+import { PAGE_REQUEST, takePendingPage } from '../../lib/appState';
 import type { Route } from '../../App';
 import { getDoc, getPdfBlob, getPdfState, patchDoc, savePdfState, uid } from '../../lib/db';
 import { clientRectToNorm, loadPdf, mergeRects, pointToNorm, type PDFDoc } from '../../lib/pdf';
@@ -14,7 +22,7 @@ import { openExternal } from '../../lib/desktop';
 import { BackChip, LinkPreview, NotesPeek, type LinkPeek } from './RefUI';
 import { openPalette, useDocTitle, usePaletteProvider, type PaletteItem } from '../../lib/appState';
 import { SpreadView, type SpreadHandle } from './SpreadView';
-import type { DocMeta, Highlight, HighlightColor, NRect, PdfState } from '../../lib/types';
+import type { DocMeta, Highlight, HighlightColor, InkStroke, NRect, PdfState } from '../../lib/types';
 import { createMarkdown } from '../../lib/importer';
 import { DisplayMenu } from '../ui/DisplayMenu';
 import { download, PopoverButton, toast } from '../ui/ui';
@@ -51,7 +59,25 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   // hand tool: drag the pages around with the mouse (the middle button always does)
   const [hand, setHand] = useState(() => localStorage.getItem('folio.hand') === '1');
   const bodyRef = useRef<HTMLDivElement>(null);
-  useHandPan(bodyRef, hand);
+  // pen mode: draw on the pages. After a stylus has been used, fingers move the page instead.
+  const [inking, setInking] = useState(false);
+  const [inkSettings, setInkSettings] = useState<InkSettings>(loadInkSettings);
+  const stylus = useRef(false);
+  const inkingRef = useRef(inking);
+  inkingRef.current = inking;
+  useHandPan(bodyRef, hand && !inking, () => inkingRef.current && stylus.current);
+  // notebook: a Markdown note open beside the book
+  const [nbOpen, setNbOpen] = useState(() => localStorage.getItem('folio.notebook') === '1');
+  const [nbWidth, setNbWidth] = useState(() => Number(localStorage.getItem('folio.notebook.w')) || Math.round(Math.min(460, window.innerWidth * 0.36)));
+  const notebook = useRef<NotebookHandle>(null);
+  useEffect(() => {
+    try {
+      localStorage.setItem('folio.notebook', nbOpen ? '1' : '0');
+      localStorage.setItem('folio.notebook.w', String(nbWidth));
+    } catch {
+      /* ignore */
+    }
+  }, [nbOpen, nbWidth]);
   useEffect(() => {
     try {
       localStorage.setItem('folio.hand', hand ? '1' : '0');
@@ -75,6 +101,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   const pagesRef = useRef<HTMLDivElement>(null);
   const anchor = useRef<{ page: number; fy: number; fx: number } | null>(null);
   const restored = useRef(false);
+  const startPage = useRef(1);
 
   /* ------------------------------ Loading ------------------------------ */
   useEffect(() => {
@@ -95,6 +122,9 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         const vp1 = (await pdf.getPage(1)).getViewport({ scale: 1 });
         if (cancelled) return;
         let sz: PageSize[] = Array.from({ length: pdf.numPages }, () => ({ w: vp1.width, h: vp1.height }));
+        // opened from a link to a page ([p. 12](<Book.pdf#page=12>)): start there
+        const asked = takePendingPage(id);
+        startPage.current = asked && asked <= pdf.numPages ? asked : (m.lastPage ?? 1);
         setMeta(m);
         setState(st);
         if (st.zoom) setZoom(st.zoom);
@@ -159,11 +189,41 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
 
+  /* --------------------------- Trimmed margins --------------------------- */
+  const trimOn = settings.pdfTrim;
+  const trim = trimOn ? state?.trim : null;
+  const cropOf = useCallback((n: number) => cropFor(trim, n), [trim]);
+  const cropRef = useRef(cropOf);
+  cropRef.current = cropOf;
+  // the size each page is shown at: the part inside the trimmed margins
+  const viewSizes = useMemo(
+    () =>
+      sizes.map((s, i) => {
+        const c = cropFor(trim, i + 1);
+        return c ? { w: s.w * c.w, h: s.h * c.h } : s;
+      }),
+    [sizes, trim],
+  );
+  // measure the margins the first time trimming is used on this document
+  const needsTrim = trimOn && !!doc && !!state && state.trim === undefined;
+  useEffect(() => {
+    if (!needsTrim || !doc) return;
+    let stale = false;
+    detectTrim(doc, () => stale).then((t) => {
+      if (stale || t === undefined) return;
+      setState((s) => (s ? { ...s, trim: t } : s));
+      if (!t) toast('This PDF’s margins are already narrow');
+    });
+    return () => {
+      stale = true;
+    };
+  }, [needsTrim, doc]);
+
   const scale = useMemo(() => {
-    if (!sizes.length || !box.w) return 1;
+    if (!viewSizes.length || !box.w) return 1;
     let maxW = 0;
     let maxH = 0;
-    sizes.forEach((s, i) => {
+    viewSizes.forEach((s, i) => {
       const r = rotOf(i + 1) % 180 !== 0;
       maxW = Math.max(maxW, r ? s.h : s.w);
       maxH = Math.max(maxH, r ? s.w : s.h);
@@ -175,7 +235,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     const fitW = Math.min(box.w - 64, 940) / maxW;
     if (zoom === 'fit-width') return clamp(fitW, 0.25, 5);
     return clamp(Math.min(fitW, (box.h - PAD_TOP - GAP) / maxH), 0.25, 5);
-  }, [zoom, sizes, box, rotOf, spread, spreadZoom]);
+  }, [zoom, viewSizes, box, rotOf, spread, spreadZoom]);
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
 
@@ -198,6 +258,13 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
       }
     }
   }, []);
+
+  // Trimming on or off: keep the same spot of the same page in view (measured before the pages change).
+  const lastTrim = useRef(trim);
+  if (lastTrim.current !== trim) {
+    lastTrim.current = trim;
+    if (layout !== 'spread') captureAnchor();
+  }
 
   // Track scroller size
   useEffect(() => {
@@ -230,13 +297,13 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     const top = el.offsetTop + pages.offsetTop;
     sc.scrollTop = top + a.fy * el.offsetHeight - sc.clientHeight / 2;
     if (sc.scrollWidth > sc.clientWidth) sc.scrollLeft = a.fx * sc.scrollWidth - sc.clientWidth / 2;
-  }, [scale, sizes, state?.rotation, state?.pageRotations]);
+  }, [scale, sizes, state?.rotation, state?.pageRotations, trim]);
 
   // Initial restore of reading position
   useLayoutEffect(() => {
     if (restored.current || !doc || !meta || !box.w) return;
     restored.current = true;
-    const n = meta.lastPage ?? 1;
+    const n = startPage.current;
     if (layoutRef.current === 'spread') return; // SpreadView opens at initialPage itself
     const el = pagesRef.current?.children[n - 1] as HTMLElement | undefined;
     if (el && scroller.current && n > 1) scroller.current.scrollTop = el.offsetTop + pagesRef.current!.offsetTop - PAD_TOP + 8;
@@ -319,6 +386,9 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     const el = pages?.children[n - 1] as HTMLElement | undefined;
     if (!sc || !pages || !el) return;
     let top = el.offsetTop + pages.offsetTop - PAD_TOP + 4;
+    // a spot on the page (0..1 of the whole page), measured inside the trimmed margins when they're hidden
+    const c = cropRef.current(n);
+    if (yFrac !== undefined && c) yFrac = (yFrac - c.y) / c.h;
     if (yFrac !== undefined && yFrac > 0.15) top += yFrac * el.offsetHeight - sc.clientHeight * 0.3;
     sc.scrollTo({ top, behavior: Math.abs(sc.scrollTop - top) < sc.clientHeight * 3 ? 'smooth' : 'auto' });
   }, []);
@@ -459,7 +529,12 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         if (role && role !== 'rest') return false;
         return layoutRef.current === 'spread' || visible.has(Number(el.dataset.page));
       });
-      const pageRects = pageEls.map((el) => ({ n: Number(el.dataset.page), r: el.getBoundingClientRect() }));
+      // r: the visible page (to find which page a line is on); full: the whole page, margins included
+      const pageRects = pageEls.map((el) => ({
+        n: Number(el.dataset.page),
+        r: el.getBoundingClientRect(),
+        full: (el.querySelector<HTMLElement>('.page-crop') ?? el).getBoundingClientRect(),
+      }));
       const byPage = new Map<number, NRect[]>();
       for (const cr of Array.from(range.getClientRects())) {
         if (cr.width < 1 || cr.height < 1) continue;
@@ -469,7 +544,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         if (!pg) continue;
         const sz = sizes[pg.n - 1];
         const list = byPage.get(pg.n) ?? [];
-        list.push(clientRectToNorm(cr, pg.r, rotOf(pg.n), sz.w * scale, sz.h * scale));
+        list.push(clientRectToNorm(cr, pg.full, rotOf(pg.n), sz.w * scale, sz.h * scale));
         byPage.set(pg.n, list);
       }
       const created: Highlight[] = [];
@@ -497,6 +572,83 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
     setPop((p) => (p?.id === hid ? null : p));
   }, []);
 
+  /* ------------------------------- Pen ink ------------------------------- */
+  const inkByPage = useMemo(() => {
+    const m: Record<number, InkStroke[]> = {};
+    state?.ink?.forEach((s) => (m[s.page] ||= []).push(s));
+    return m;
+  }, [state?.ink]);
+  const inkByPageRef = useRef(inkByPage);
+  inkByPageRef.current = inkByPage;
+  const inkSettingsRef = useRef(inkSettings);
+  inkSettingsRef.current = inkSettings;
+  useEffect(() => saveInkSettings(inkSettings), [inkSettings]);
+  if (!stylus.current && localStorage.getItem('folio.stylus') === '1') stylus.current = true;
+
+  // undo / redo: each step adds and / or removes strokes
+  type InkStep = { added: InkStroke[]; removed: InkStroke[] };
+  const [undoStack, setUndoStack] = useState<InkStep[]>([]);
+  const [redoStack, setRedoStack] = useState<InkStep[]>([]);
+  const applyInk = useCallback((add: InkStroke[], remove: InkStroke[]) => {
+    const gone = new Set(remove.map((s) => s.id));
+    setState((st) => (st ? { ...st, ink: [...(st.ink ?? []).filter((s) => !gone.has(s.id)), ...add] } : st));
+  }, []);
+  const record = useCallback((step: InkStep) => {
+    setUndoStack((u) => [...u.slice(-199), step]);
+    setRedoStack([]);
+  }, []);
+  const undoInk = useCallback(() => {
+    setUndoStack((u) => {
+      const step = u[u.length - 1];
+      if (!step) return u;
+      applyInk(step.removed, step.added);
+      setRedoStack((r) => [...r, step]);
+      return u.slice(0, -1);
+    });
+  }, [applyInk]);
+  const redoInk = useCallback(() => {
+    setRedoStack((r) => {
+      const step = r[r.length - 1];
+      if (!step) return r;
+      applyInk(step.added, step.removed);
+      setUndoStack((u) => [...u, step]);
+      return r.slice(0, -1);
+    });
+  }, [applyInk]);
+
+  useInk(scroller, inking && !!doc, {
+    settings: () => inkSettingsRef.current,
+    stylus: () => stylus.current,
+    onStylus: () => {
+      if (stylus.current) return;
+      stylus.current = true;
+      try {
+        localStorage.setItem('folio.stylus', '1');
+      } catch {
+        /* ignore */
+      }
+    },
+    strokesOn: (p) => inkByPageRef.current[p] ?? [],
+    onStroke: (s) => {
+      applyInk([s], []);
+      record({ added: [s], removed: [] });
+    },
+    onErase: (ids) => {
+      const removed = Object.values(inkByPageRef.current)
+        .flat()
+        .filter((s) => ids.includes(s.id));
+      if (!removed.length) return;
+      applyInk([], removed);
+      record({ added: [], removed });
+    },
+  });
+  const toggleInk = useCallback(() => {
+    setInking((v) => !v);
+    window.getSelection()?.removeAllRanges();
+    setSel(null);
+    setPop(null);
+  }, []);
+
   const onPageClick = useCallback(
     (e: React.MouseEvent) => {
       const s = window.getSelection();
@@ -507,7 +659,8 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         const list = highlightsByPage[n];
         if (list?.length) {
           const sz = sizes[n - 1];
-          const p = pointToNorm(e.clientX, e.clientY, el.getBoundingClientRect(), rotOf(n), sz.w * scale, sz.h * scale);
+          const full = (el.querySelector<HTMLElement>('.page-crop') ?? el).getBoundingClientRect();
+          const p = pointToNorm(e.clientX, e.clientY, full, rotOf(n), sz.w * scale, sz.h * scale);
           // fingers are less precise than a mouse pointer
           const pad = touch ? 0.012 : 0.004;
           const hit = [...list].reverse().find((h) => h.rects.some((r) => p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad));
@@ -524,6 +677,10 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   useEffect(() => {
     if (leftOpen || rightOpen) setChromeHidden(false);
   }, [leftOpen, rightOpen]);
+  // On a tablet the highlights drawer and the notebook take turns.
+  useEffect(() => {
+    if (touch && rightOpen) setNbOpen(false);
+  }, [touch, rightOpen]);
 
   /* ------------------------------ Pinch zoom ----------------------------- */
   const pinch = useRef<{ target: HTMLElement; base: number; page?: { i: number; fx: number; fy: number } } | null>(null);
@@ -557,7 +714,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         const kk = clamp(p.base * k, lo, hi) / p.base;
         p.target.style.transform = `translate(${mid.x - mid0.x}px, ${mid.y - mid0.y}px) scale(${kk})`;
       },
-      onEnd: (k, mid) => {
+      onEnd: (k, mid, mid0) => {
         const p = pinch.current;
         pinch.current = null;
         if (!p) return;
@@ -568,7 +725,13 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
           p.target.style.transformOrigin = '';
           p.target.classList.remove('pinching');
         };
-        if (Math.abs(next - p.base) < 0.01) return reset();
+        if (Math.abs(next - p.base) < 0.01) {
+          reset();
+          // two fingers moved without zooming: that's a pan (how you move around in pen mode)
+          const sc = layoutRef.current === 'spread' ? scroller.current?.querySelector<HTMLElement>('.spread-stage') : scroller.current;
+          sc?.scrollBy({ left: mid0.x - mid.x, top: mid0.y - mid.y });
+          return;
+        }
         const done = { target: p.target, page: p.page, mx: mid.x, my: mid.y };
         pinchDone.current = done;
         if (layoutRef.current === 'spread') setSpreadZoom((z) => clamp(Math.round(z * (next / p.base) * 100) / 100, 0.5, 5));
@@ -696,6 +859,11 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         return;
       }
       if (e.altKey && e.key === 'ArrowLeft' && !typing) return e.preventDefault(), goBack();
+      if (inking && mod && !typing) {
+        const k = e.key.toLowerCase();
+        if (k === 'z' && !e.shiftKey) return e.preventDefault(), undoInk();
+        if (k === 'y' || (k === 'z' && e.shiftKey)) return e.preventDefault(), redoInk();
+      }
       if (mod && (e.key === '=' || e.key === '+')) return e.preventDefault(), zoomIn();
       if (mod && e.key === '-') return e.preventDefault(), zoomOut();
       if (mod && e.key === '0') return e.preventDefault(), applyZoom('fit-width');
@@ -747,6 +915,18 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         case 'g':
           setHand((v) => !v);
           break;
+        case 'p':
+          toggleInk();
+          break;
+        case 'e':
+          if (inking) setInkSettings((s) => ({ ...s, mode: s.mode === 'eraser' ? 'pen' : 'eraser' }));
+          break;
+        case 'w':
+          setNbOpen((o) => !o);
+          break;
+        case 'm':
+          updateSettings({ pdfTrim: !settings.pdfTrim });
+          break;
         case 'j':
           goTo(Math.min(current + 1, sizes.length));
           break;
@@ -754,13 +934,14 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
           goTo(Math.max(current - 1, 1));
           break;
         case 'Escape':
-          if (!pop && !sel) go({ view: 'library' });
+          if (inking) setInking(false);
+          else if (!pop && !sel) go({ view: 'library' });
           break;
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [zoomIn, zoomOut, applyZoom, rotateAll, createHighlight, lastColor, goTo, current, sizes.length, pop, sel, go, toggleBookmark, notesHere.length, goBack]);
+  }, [zoomIn, zoomOut, applyZoom, rotateAll, createHighlight, lastColor, goTo, current, sizes.length, pop, sel, go, toggleBookmark, notesHere.length, goBack, inking, undoInk, redoInk, toggleInk, settings.pdfTrim]);
 
   /* ------------------------------ Export ------------------------------- */
   const exportNotes = () => {
@@ -775,18 +956,76 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
 
   const exportPdf = useCallback(async () => {
     if (!meta || !state || !doc) return;
-    if (!state.highlights.length) return toast('No highlights to export yet');
+    if (!state.highlights.length && !state.ink?.length) return toast('No highlights or drawings to export yet');
     try {
       const blob = await getPdfBlob(id);
       if (!blob) throw new Error('The file data is missing.');
       const { exportAnnotatedPdf } = await import('../../lib/pdfExport');
-      const out = await exportAnnotatedPdf(await blob.arrayBuffer(), doc, state.highlights);
+      const out = await exportAnnotatedPdf(await blob.arrayBuffer(), doc, state.highlights, state.ink ?? []);
       download(`${meta.name} (highlighted).pdf`, new Blob([out as BlobPart], { type: 'application/pdf' }), 'application/pdf');
     } catch (e) {
       console.warn(e);
       toast('Couldn’t write highlights into this PDF');
     }
   }, [meta, state, doc, id]);
+
+  /* ------------------------ Notebook & dictionary ------------------------ */
+  const pageOfRange = (r: Range) => {
+    const n = r.startContainer instanceof Element ? r.startContainer : r.startContainer.parentElement;
+    const el = n?.closest<HTMLElement>('.page[data-page]');
+    return el ? Number(el.dataset.page) : currentRef.current;
+  };
+  const dropSelection = () => {
+    window.getSelection()?.removeAllRanges();
+    selRange.current = null;
+    setSel(null);
+  };
+  const canQuote = nbOpen && !!meta?.notebookId;
+  const quoteSelection = () => {
+    const r = selRange.current;
+    const text = window.getSelection()?.toString() ?? '';
+    if (!r || !meta || !text.trim()) return;
+    notebook.current?.insert(quoteMarkdown(text, pageOfRange(r), meta.name));
+    dropSelection();
+    toast('Quoted in your notebook');
+  };
+  const defineSelection = () => {
+    const text = window.getSelection()?.toString() ?? '';
+    const rect = selRange.current?.getBoundingClientRect() ?? null;
+    dropSelection();
+    openDictionary(text, rect);
+  };
+  // dragging selected text out of the book carries a linked quote (the notebook turns it into one)
+  const onDragStart = (e: React.DragEvent) => {
+    const r = selRange.current;
+    const text = window.getSelection()?.toString().trim() ?? '';
+    if (!r || !meta || !text) return;
+    const md = quoteMarkdown(text, pageOfRange(r), meta.name);
+    e.dataTransfer.setData(QUOTE_MIME, JSON.stringify({ md }));
+    e.dataTransfer.setData('text/plain', md);
+  };
+  const onDragCard = (h: Highlight, e: React.DragEvent) => {
+    if (!meta) return;
+    const md = quoteMarkdown(h.text, h.page, meta.name) + (h.note.trim() ? '\n' + h.note.trim() + '\n' : '');
+    e.dataTransfer.setData(QUOTE_MIME, JSON.stringify({ md }));
+    e.dataTransfer.setData('text/plain', md);
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+  // a link in a note to a page of this book, clicked while the book is open
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ id: string; page: number }>).detail;
+      if (d?.id === id && d.page >= 1) jumpAway(Math.min(d.page, sizes.length || d.page));
+    };
+    window.addEventListener(PAGE_REQUEST, on);
+    return () => window.removeEventListener(PAGE_REQUEST, on);
+  }, [id, jumpAway, sizes.length]);
+  const toggleNotebook = () => {
+    setNbOpen((o) => {
+      if (!o && touch) setRightOpen(false); // one panel at a time on a tablet
+      return !o;
+    });
+  };
 
   /* -------------------------- Reading edition -------------------------- */
   const job = useConvertJob(id);
@@ -836,10 +1075,13 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         { id: 'pdf-edition', title: converting ? 'Reading edition: show progress' : editionId ? 'Make the reading edition again' : 'Make a reading edition', group, keywords: 'convert reflow ebook text ocr groq notes links', run: () => setConvertOpen(true) },
         { id: 'pdf-rotate', title: 'Rotate pages clockwise', hint: 'R', group, run: () => rotateAll(90) },
         { id: 'pdf-hand', title: hand ? 'Turn off the hand tool' : 'Hand tool: drag to move around', hint: 'G', group, keywords: 'pan grab drag move scroll', run: () => setHand((v) => !v) },
+        { id: 'pdf-ink', title: inking ? 'Stop drawing' : 'Draw with the pen', hint: 'P', group, keywords: 'pen ink handwriting annotate stylus marker highlighter draw write', run: toggleInk },
+        { id: 'pdf-notebook', title: nbOpen ? 'Close the notebook' : 'Open the notebook beside the book', hint: 'W', group, keywords: 'notes write markdown side quote', run: () => setNbOpen((o) => !o) },
+        { id: 'pdf-trim', title: settings.pdfTrim ? 'Show the full pages' : 'Trim white margins', hint: 'M', group, keywords: 'crop margins zoom bigger text', run: () => updateSettings({ pdfTrim: !settings.pdfTrim }) },
       );
       return items;
     },
-    [pageTotal, bookmarks, current, goTo, toggleBookmark, exportPdf, rotateAll, notesHere.length, editionId, converting, openEdition, hand],
+    [pageTotal, bookmarks, current, goTo, toggleBookmark, exportPdf, rotateAll, notesHere.length, editionId, converting, openEdition, hand, inking, toggleInk, nbOpen, settings.pdfTrim],
   );
   usePaletteProvider('pdf', paletteProvider);
 
@@ -849,7 +1091,12 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
   const numPages = sizes.length;
 
   return (
-    <div className={`reader pdf-reader filter-${settings.pageFilter}${chromeHidden ? ' chrome-hidden' : ''}${hand && !touch ? ' hand-mode' : ''}`}>
+    <div
+      className={`reader pdf-reader filter-${settings.pageFilter}${chromeHidden ? ' chrome-hidden' : ''}${hand && !touch && !inking ? ' hand-mode' : ''}${
+        inking ? ' inking' + (inkSettings.mode === 'eraser' ? ' ink-eraser' : '') : ''
+      }`}
+      style={{ ['--nb-w' as string]: nbOpen && meta ? nbWidth + 'px' : '0px' }}
+    >
       <header className="reader-bar">
         <div className="bar-left">
           <button className="icon-btn" data-tip="Library" aria-label="Back to library" onClick={() => go({ view: 'library' })}>
@@ -929,6 +1176,24 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
           <span className="divider-v" />
           </>)}
           <button
+            className={'icon-btn' + (inking ? ' active' : '')}
+            data-tip={inking ? 'Stop drawing  P' : 'Pen  P'}
+            aria-label="Pen"
+            aria-pressed={inking}
+            onClick={toggleInk}
+          >
+            <PenTool size={17} />
+          </button>
+          <button
+            className={'icon-btn' + (nbOpen ? ' active' : '')}
+            data-tip="Notebook  W"
+            aria-label="Notebook"
+            aria-pressed={nbOpen}
+            onClick={toggleNotebook}
+          >
+            <NotebookPen size={17} />
+          </button>
+          <button
             className={'icon-btn' + (bookmarks.includes(current) ? ' active' : '')}
             data-tip={bookmarks.includes(current) ? 'Remove bookmark  B' : 'Bookmark page  B'}
             aria-label="Toggle bookmark"
@@ -969,6 +1234,10 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
                   </button>
                   <button className="menu-item" onClick={() => zoomOut()}>
                     <ZoomOut size={16} /> Zoom out
+                  </button>
+                  <button className="menu-item" onClick={() => (updateSettings({ pdfTrim: !settings.pdfTrim }), close())}>
+                    <Crop size={16} /> {settings.pdfTrim ? 'Show the full pages' : 'Trim white margins'}
+                    {settings.pdfTrim && <span className="menu-right"><Check size={14} /></span>}
                   </button>
                   <div className="menu-sep" />
                   <button className="menu-item" onClick={() => rotateAll(-90)}>
@@ -1031,6 +1300,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
           }}
           onKeyUp={(e) => e.shiftKey && checkSelection()}
           onClick={onPageClick}
+          onDragStart={onDragStart}
         >
           {error ? (
             <div className="reader-error">
@@ -1047,6 +1317,9 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
               ref={spreadRef}
               doc={doc}
               sizes={sizes}
+              viewSizes={viewSizes}
+              cropOf={cropOf}
+              inkByPage={inkByPage}
               scale={scale}
               rotOf={rotOf}
               highlightsByPage={highlightsByPage}
@@ -1058,7 +1331,7 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
               pageFilter={settings.pageFilter}
               bookmarks={bookmarks}
               onLink={onLink}
-              initialPage={restored.current ? current : (meta?.lastPage ?? 1)}
+              initialPage={restored.current ? current : startPage.current}
               onPage={onSpreadPage}
             />
           ) : (
@@ -1077,6 +1350,8 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
                   flashId={flash}
                   search={sideTab === 'search' && leftOpen ? query : ''}
                   bookmarked={bookmarks.includes(i + 1)}
+                  ink={inkByPage[i + 1]}
+                  crop={cropOf(i + 1)}
                   onLink={onLink}
                 />
               ))}
@@ -1106,9 +1381,34 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
             onExport={exportNotes}
             onExportNote={exportAsNote}
             onExportPdf={exportPdf}
+            onDragCard={nbOpen && !touch ? onDragCard : undefined}
+          />
+        )}
+
+        {nbOpen && meta && (
+          <Notebook
+            ref={notebook}
+            pdf={meta}
+            width={nbWidth}
+            onResize={setNbWidth}
+            onLink={setMeta}
+            onClose={() => setNbOpen(false)}
+            go={go}
           />
         )}
       </div>
+
+      {inking && (
+        <InkBar
+          settings={inkSettings}
+          onChange={setInkSettings}
+          canUndo={undoStack.length > 0}
+          canRedo={redoStack.length > 0}
+          onUndo={undoInk}
+          onRedo={redoInk}
+          onDone={() => setInking(false)}
+        />
+      )}
 
       {doc && linkPeek && (
         <LinkPreview
@@ -1151,7 +1451,15 @@ export default function PdfReader({ id, go }: { id: string; go: (r: Route) => vo
         </div>
       )}
 
-      {sel && <SelectionToolbar below={touch} rect={sel} lastColor={lastColor} onColor={(c) => createHighlight(c)} onNote={() => createHighlight(lastColor, true)} onCopy={() => {
+      {sel && !inking && <SelectionToolbar
+        below={touch}
+        rect={sel}
+        lastColor={lastColor}
+        onColor={(c) => createHighlight(c)}
+        onNote={() => createHighlight(lastColor, true)}
+        onQuote={canQuote ? quoteSelection : undefined}
+        onDefine={isLookupable(window.getSelection()?.toString() ?? '') ? defineSelection : undefined}
+        onCopy={() => {
         navigator.clipboard.writeText(window.getSelection()?.toString() ?? '');
         toast('Copied');
       }} />}

@@ -13,6 +13,8 @@ import { createMarkdown } from '../../lib/importer';
 import { DisplayMenu } from '../ui/DisplayMenu';
 import { download, toast } from '../ui/ui';
 import { HighlightPopover, highlightsToMarkdown, NotesPanel, SelectionToolbar } from '../pdf/Annotations';
+import { openDictionary } from '../ui/Dictionary';
+import { isLookupable } from '../../lib/dictionary';
 import { MarkdownView } from './MarkdownView';
 import { BackChip } from '../pdf/RefUI';
 
@@ -206,6 +208,15 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
       document.removeEventListener('selectionchange', onChange);
     };
   }, [clearSel, checkSelection, touch]);
+
+  const defineSelection = useCallback(() => {
+    const s = window.getSelection();
+    const text = s?.toString() ?? '';
+    const rect = selRange.current?.getBoundingClientRect() ?? null;
+    s?.removeAllRanges();
+    clearSel();
+    openDictionary(text, rect);
+  }, [clearSel]);
 
   // Opening a drawer brings the toolbar back.
   useEffect(() => {
@@ -448,6 +459,7 @@ export default function MdReader({ id, go }: { id: string; go: (r: Route) => voi
           lastColor={lastColor}
           onColor={(c) => createHighlight(c)}
           onNote={() => createHighlight(lastColor, true)}
+          onDefine={isLookupable(window.getSelection()?.toString() ?? '') ? defineSelection : undefined}
           onCopy={() => {
             navigator.clipboard.writeText(window.getSelection()?.toString() ?? '');
             toast('Copied');

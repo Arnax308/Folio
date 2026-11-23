@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Copy, Download, FileDown, FilePlus, Highlighter, MessageSquare, Trash, X } from 'lucide-react';
+import { BookA, Copy, Download, FileDown, FilePlus, Highlighter, MessageSquare, NotebookPen, Trash, X } from 'lucide-react';
 import { HIGHLIGHT_COLORS, type Annotation, type HighlightColor } from '../../lib/types';
 import { timeAgo } from '../ui/ui';
 
@@ -9,6 +9,8 @@ export function SelectionToolbar({
   onColor,
   onNote,
   onCopy,
+  onDefine,
+  onQuote,
   lastColor,
   below = false,
 }: {
@@ -18,6 +20,10 @@ export function SelectionToolbar({
   onColor: (c: HighlightColor) => void;
   onNote: () => void;
   onCopy: () => void;
+  /** Look the selected word up in the dictionary (only offered for a word or short phrase). */
+  onDefine?: () => void;
+  /** Copy the passage into the notebook open beside the book. */
+  onQuote?: () => void;
   lastColor: HighlightColor;
 }) {
   const above = below ? rect.bottom > window.innerHeight - 110 : rect.top > 90;
@@ -41,6 +47,16 @@ export function SelectionToolbar({
       <button className="sel-btn" onClick={onNote}>
         <MessageSquare size={15} /> Note
       </button>
+      {onQuote && (
+        <button className="sel-btn" onClick={onQuote} data-tip="Quote it in your notebook">
+          <NotebookPen size={15} /> Quote
+        </button>
+      )}
+      {onDefine && (
+        <button className="sel-btn" onClick={onDefine} data-tip="Look it up">
+          <BookA size={15} /> Define
+        </button>
+      )}
       <button className="sel-btn icon" onClick={onCopy} aria-label="Copy">
         <Copy size={15} />
       </button>
@@ -163,6 +179,7 @@ export function NotesPanel<T extends Annotation>({
   label,
   isDetached,
   emptyHint = 'Select text on any page and pick a colour. Add notes to remember why it mattered.',
+  onDragCard,
 }: {
   highlights: T[];
   onJump: (h: T) => void;
@@ -176,6 +193,8 @@ export function NotesPanel<T extends Annotation>({
   label: (h: T) => string;
   isDetached?: (h: T) => boolean;
   emptyHint?: string;
+  /** Lets a card be dragged (into the notebook beside the book). */
+  onDragCard?: (h: T, e: React.DragEvent) => void;
 }) {
   const [filter, setFilter] = useState<HighlightColor | 'all' | 'notes'>('all');
   const [editing, setEditing] = useState<string | null>(null);
@@ -242,6 +261,8 @@ export function NotesPanel<T extends Annotation>({
             key={h.id}
             className={`note-card c-${h.color}${activeId === h.id ? ' active' : ''}${isDetached?.(h) ? ' detached' : ''}`}
             onClick={() => onJump(h)}
+            draggable={!!onDragCard && editing !== h.id}
+            onDragStart={onDragCard ? (e) => onDragCard(h, e) : undefined}
           >
             <div className="note-card-top">
               <span className="note-page">{label(h)}</span>

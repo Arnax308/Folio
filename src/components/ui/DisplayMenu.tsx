@@ -37,6 +37,7 @@ export function DisplayMenu({ mode }: { mode: 'pdf' | 'md' }) {
                   <button className={s.pdfLayout === 'spread' ? 'on' : ''} onClick={() => updateSettings({ pdfLayout: 'spread' })}>Two pages</button>
                 </div>
               </div>
+              <Switch label="Trim white margins" hint="Bigger text, less empty paper  M" checked={s.pdfTrim} onChange={(v) => updateSettings({ pdfTrim: v })} />
               <Switch label="Page-turn animation" hint="Flip pages like a book" checked={s.pageTurn} onChange={(v) => updateSettings({ pageTurn: v })} />
               <Switch label="Cover on its own" hint="Start spreads from page 2" checked={s.spreadCover} onChange={(v) => updateSettings({ spreadCover: v })} />
             </>

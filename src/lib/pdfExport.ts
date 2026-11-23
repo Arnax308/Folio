@@ -1,6 +1,6 @@
 import { PDFDocument, PDFHexString, PDFString } from 'pdf-lib';
 import type { PDFDoc } from './pdf';
-import type { Highlight, HighlightColor } from './types';
+import type { Highlight, HighlightColor, InkStroke } from './types';
 
 const COLORS: Record<HighlightColor, [number, number, number]> = {
   yellow: [1, 0.847, 0.29],
@@ -16,7 +16,7 @@ const n2 = (v: number) => Number(v.toFixed(2));
  * (with notes as their comments), so they show up in Acrobat, Edge, Preview and other readers.
  * `doc` is the pdf.js document, used to map Folio's page-relative rectangles back to PDF coordinates.
  */
-export async function exportAnnotatedPdf(bytes: ArrayBuffer, doc: PDFDoc, highlights: Highlight[]): Promise<Uint8Array> {
+export async function exportAnnotatedPdf(bytes: ArrayBuffer, doc: PDFDoc, highlights: Highlight[], ink: InkStroke[] = []): Promise<Uint8Array> {
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
   const pages = pdf.getPages();
   const byPage = new Map<number, Highlight[]>();
@@ -80,6 +80,64 @@ export async function exportAnnotatedPdf(bytes: ArrayBuffer, doc: PDFDoc, highli
         NM: PDFString.of(h.id),
         M: PDFString.fromDate(new Date(h.createdAt)),
         Contents: PDFHexString.fromText(h.note.trim()),
+        AP: { N: appearance },
+      });
+      page.node.addAnnot(pdf.context.register(annot));
+    }
+  }
+  // pen drawings: standard Ink annotations, so other readers show (and can erase) them too
+  const inkByPage = new Map<number, InkStroke[]>();
+  for (const st of ink) inkByPage.set(st.page, [...(inkByPage.get(st.page) ?? []), st]);
+  for (const [num, list] of inkByPage) {
+    const page = pages[num - 1];
+    if (!page) continue;
+    const vp = (await doc.getPage(num)).getViewport({ scale: 1 });
+    for (const st of list) {
+      const pts: number[] = [];
+      for (let i = 0; i < st.pts.length; i += 2) {
+        const [x, y] = vp.convertToPdfPoint(st.pts[i] * vp.width, st.pts[i + 1] * vp.height) as [number, number];
+        pts.push(n2(x), n2(y));
+      }
+      if (pts.length === 2) pts.push(n2(pts[0] + 0.1), pts[1]);
+      const lw = n2(Math.max(0.3, st.width * vp.width));
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (let i = 0; i < pts.length; i += 2) {
+        minX = Math.min(minX, pts[i]);
+        maxX = Math.max(maxX, pts[i]);
+        minY = Math.min(minY, pts[i + 1]);
+        maxY = Math.max(maxY, pts[i + 1]);
+      }
+      const rect = [n2(minX - lw), n2(minY - lw), n2(maxX + lw), n2(maxY + lw)];
+      const hex = parseInt(st.color.slice(1), 16);
+      const rgb = [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255].map((v) => +v.toFixed(3));
+      const marker = st.tool === 'marker';
+      const ops = [marker ? '/GS0 gs' : '', `${rgb.join(' ')} RG`, `${lw} w`, '1 J', '1 j', `${pts[0]} ${pts[1]} m`];
+      for (let i = 2; i < pts.length; i += 2) ops.push(`${pts[i]} ${pts[i + 1]} l`);
+      ops.push('S');
+      const appearance = pdf.context.register(
+        pdf.context.stream(ops.filter(Boolean).join(' \n'), {
+          Type: 'XObject',
+          Subtype: 'Form',
+          FormType: 1,
+          BBox: rect,
+          ...(marker ? { Resources: { ExtGState: { GS0: { Type: 'ExtGState', BM: 'Multiply', CA: 0.5 } } } } : {}),
+        }),
+      );
+      const annot = pdf.context.obj({
+        Type: 'Annot',
+        Subtype: 'Ink',
+        Rect: rect,
+        InkList: [pts],
+        C: rgb,
+        BS: { W: lw, S: 'S' },
+        ...(marker ? { CA: 0.5 } : {}),
+        F: 4,
+        T: PDFString.of('Folio'),
+        NM: PDFString.of(st.id),
+        M: PDFString.fromDate(new Date(st.createdAt)),
         AP: { N: appearance },
       });
       page.node.addAnnot(pdf.context.register(annot));

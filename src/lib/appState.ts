@@ -64,3 +64,26 @@ export function usePaletteProvider(key: string, provider: Provider) {
     };
   }, [key, provider]);
 }
+
+/* ------------------------------ Links to a page ----------------------------- */
+// A link like [p. 12](<Book.pdf#page=12>) in a note opens that book at that page: straight away if
+// the book is already open, otherwise once its reader has loaded.
+export const PAGE_REQUEST = 'folio:open-page';
+let pendingPage: { id: string; page: number } | null = null;
+
+export function openPdfAt(id: string, page: number) {
+  if (location.hash === `#/pdf/${id}`) {
+    window.dispatchEvent(new CustomEvent(PAGE_REQUEST, { detail: { id, page } }));
+    return;
+  }
+  pendingPage = { id, page };
+  location.hash = `/pdf/${id}`;
+}
+
+/** The page a link asked this PDF to open at, if any (asked once, when the reader loads). */
+export function takePendingPage(id: string) {
+  if (pendingPage?.id !== id) return null;
+  const { page } = pendingPage;
+  pendingPage = null;
+  return page;
+}

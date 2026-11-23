@@ -1,11 +1,14 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 
 /**
  * Drag the page around with the mouse instead of scrolling: with the hand tool on (left button), or
  * any time with the middle button. Works on whatever scrolls under the pointer: the page column, or
  * the zoomed-in two-page view. Lets go with a little momentum, like a touchscreen.
  */
-export function useHandPan(root: RefObject<HTMLElement | null>, hand: boolean) {
+export function useHandPan(root: RefObject<HTMLElement | null>, hand: boolean, touchPan?: () => boolean) {
+  // pen mode with a stylus: one finger moves the page (the page itself doesn't scroll natively then)
+  const fingers = useRef(touchPan);
+  fingers.current = touchPan;
   useEffect(() => {
     const el = root.current;
     if (!el) return;
@@ -17,9 +20,17 @@ export function useHandPan(root: RefObject<HTMLElement | null>, hand: boolean) {
     const canScroll = (s: HTMLElement) => s.scrollHeight > s.clientHeight + 1 || s.scrollWidth > s.clientWidth + 1;
 
     const down = (e: PointerEvent) => {
-      if (e.pointerType !== 'mouse') return;
+      if (e.pointerType === 'touch') {
+        // a second finger means a pinch: let go
+        if (drag) {
+          if (drag.id !== e.pointerId) drag = null;
+          document.documentElement.classList.remove('hand-dragging');
+          return;
+        }
+        if (!e.isPrimary || !fingers.current?.()) return;
+      } else if (e.pointerType !== 'mouse') return;
       const middle = e.button === 1;
-      if (!middle && !(hand && e.button === 0)) return;
+      if (e.pointerType === 'mouse' && !middle && !(hand && e.button === 0)) return;
       const t = e.target as Element;
       // the toolbar, menus and popovers keep working normally
       if (!middle && t.closest('button, input, textarea, select, .popover, .hl-popover, .sel-toolbar, .ref-card, .notes-peek, .side-panel')) return;

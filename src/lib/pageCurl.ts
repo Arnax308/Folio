@@ -1,3 +1,4 @@
+import type { InkStroke } from './types';
 /**
  * WebGL page curl: the turning page is a mesh wrapped around a moving cylinder
  * (the classic iBooks-style curl), lit by the curvature, with soft shadows cast
@@ -410,14 +411,21 @@ export function snapshotPage(
   rotation: number,
   rects: { color: string; x: number; y: number; w: number; h: number }[],
   filter: string,
+  ink: InkStroke[] = [],
 ): HTMLCanvasElement | null {
   const src = pageEl.querySelector<HTMLCanvasElement>('.canvas-wrap canvas');
   if (!src || !src.width) return null;
   const W = pageEl.offsetWidth;
   const H = pageEl.offsetHeight;
+  // trimmed margins: the whole page sits inside .page-crop, offset so only the text area shows
+  const crop = pageEl.querySelector<HTMLElement>('.page-crop');
+  const FW = crop?.offsetWidth || W;
+  const FH = crop?.offsetHeight || H;
+  const ox = crop?.offsetLeft ?? 0;
+  const oy = crop?.offsetTop ?? 0;
   const rotated = rotation % 180 !== 0;
-  const w = rotated ? H : W;
-  const h = rotated ? W : H;
+  const w = rotated ? FH : FW;
+  const h = rotated ? FW : FH;
   const s = Math.min(window.devicePixelRatio || 1, 2);
   const c = document.createElement('canvas');
   c.width = Math.round(W * s);
@@ -433,7 +441,7 @@ export function snapshotPage(
     270: [0, -1, 1, 0, 0, w],
   };
   const [a, b, cc, d, e, f] = m[rotation] ?? m[0];
-  ctx.setTransform(a * s, b * s, cc * s, d * s, e * s, f * s);
+  ctx.setTransform(a * s, b * s, cc * s, d * s, (e + ox) * s, (f + oy) * s);
   ctx.filter = FILTERS[filter] ?? 'none';
   ctx.drawImage(src, 0, 0, w, h);
   ctx.filter = 'none';
@@ -444,5 +452,34 @@ export function snapshotPage(
     ctx.fillStyle = r.color;
     ctx.fillRect(r.x * w, r.y * h, r.w * w, r.h * h);
   }
+  // pen drawings: highlighter strokes blend like highlights, pen strokes sit on top
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const pass of ['marker', 'pen'] as const) {
+    for (const st of ink) {
+      if (st.tool !== pass) continue;
+      ctx.globalAlpha = pass === 'marker' ? (night ? 0.4 : 0.5) : 1;
+      ctx.globalCompositeOperation = pass === 'marker' ? (night ? 'screen' : 'multiply') : 'source-over';
+      ctx.strokeStyle = pass === 'pen' && night ? invertHex(st.color) : st.color;
+      ctx.lineWidth = Math.max(0.6, st.width * w);
+      ctx.beginPath();
+      for (let i = 0; i < st.pts.length; i += 2) {
+        const x = st.pts[i] * w;
+        const y = st.pts[i + 1] * h;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      if (st.pts.length === 2) ctx.lineTo(st.pts[0] * w + 0.01, st.pts[1] * h);
+      ctx.stroke();
+    }
+  }
   return c;
+}
+
+/** Night mode shows pen ink inverted (dark ink becomes light), like the page under it. */
+function invertHex(hex: string) {
+  const n = parseInt(hex.slice(1), 16);
+  if (Number.isNaN(n)) return hex;
+  const v = (sh: number) => Math.round(255 - ((n >> sh) & 255) * 0.9);
+  return `rgb(${v(16)}, ${v(8)}, ${v(0)})`;
 }

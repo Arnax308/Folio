@@ -14,6 +14,7 @@ export interface Settings {
   pageTurn: boolean; // animated page flip in two-page view
   spreadCover: boolean; // show page 1 on its own, like a book cover
   uiMode: UiMode; // touch-first tablet interface, or the mouse-first desktop one
+  pdfTrim: boolean; // hide the white margins around PDF pages
 }
 
 const KEY = 'folio.settings';
@@ -27,6 +28,7 @@ const defaults: Settings = {
   pageTurn: !matchMedia('(prefers-reduced-motion: reduce)').matches,
   spreadCover: true,
   uiMode: 'auto',
+  pdfTrim: false,
 };
 
 let current: Settings = (() => {

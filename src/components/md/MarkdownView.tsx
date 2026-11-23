@@ -5,6 +5,7 @@ import { useSettings } from '../../lib/settings';
 import { isTauri, openExternal } from '../../lib/desktop';
 import { listDocs } from '../../lib/db';
 import { toast } from '../ui/ui';
+import { openPdfAt } from '../../lib/appState';
 
 interface Props {
   source: string;
@@ -164,7 +165,9 @@ async function openLibraryLink(href: string) {
   const kind = /\.pdf$/i.test(file) ? 'pdf' : /\.(md|markdown|mdown|mkd|txt)$/i.test(file) ? 'md' : null;
   const docs = await listDocs();
   const doc = docs.find((d) => d.name.trim().toLowerCase() === stem && (!kind || d.kind === kind)) ?? docs.find((d) => d.name.trim().toLowerCase() === stem);
-  if (doc) location.hash = `/${doc.kind}/${doc.id}`;
+  const page = Number(/[#&]page=(\d+)/i.exec(href)?.[1]);
+  if (doc && doc.kind === 'pdf' && page > 0) openPdfAt(doc.id, page);
+  else if (doc) location.hash = `/${doc.kind}/${doc.id}`;
   else toast(`“${file}” isn’t in your library`);
 }
 

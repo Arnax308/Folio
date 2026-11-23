@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { PDFDoc } from '../../lib/pdf';
-import type { Highlight } from '../../lib/types';
+import type { Highlight, InkStroke, NRect } from '../../lib/types';
 import { createCurl, easeInOut, easeOut, progressAtPointer, snapshotPage, type CurlController } from '../../lib/pageCurl';
 import { PageView, type PageSize } from './PageView';
 import type { PdfLink } from '../../lib/references';
@@ -15,6 +15,10 @@ export interface SpreadHandle {
 interface Props {
   doc: PDFDoc;
   sizes: PageSize[];
+  /** Page sizes as shown (inside trimmed margins). */
+  viewSizes: PageSize[];
+  cropOf: (n: number) => NRect | null;
+  inkByPage: Record<number, InkStroke[]>;
   scale: number;
   rotOf: (n: number) => number;
   highlightsByPage: Record<number, Highlight[]>;
@@ -138,13 +142,13 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
     };
     if (!book || !canvas || !frontEl || !frontNum) return fail();
 
-    const { highlightsByPage, rotOf, pageFilter } = latest.current;
+    const { highlightsByPage, rotOf, pageFilter, inkByPage } = latest.current;
     const css = getComputedStyle(document.documentElement);
     const rectsOf = (n: number) =>
       (highlightsByPage[n] ?? []).flatMap((h) => h.rects.map((r) => ({ ...r, color: css.getPropertyValue('--hl-' + h.color).trim() || '#ffd84a' })));
-    const front = snapshotPage(frontEl, rotOf(frontNum), rectsOf(frontNum), pageFilter);
+    const front = snapshotPage(frontEl, rotOf(frontNum), rectsOf(frontNum), pageFilter, inkByPage[frontNum]);
     const backEl = pageEl(backNum);
-    const back = backEl && backNum ? snapshotPage(backEl, rotOf(backNum), rectsOf(backNum), pageFilter) : null;
+    const back = backEl && backNum ? snapshotPage(backEl, rotOf(backNum), rectsOf(backNum), pageFilter, inkByPage[backNum]) : null;
     if (!front) return fail(); // a missing back face just shows blank paper
 
     const bookRect = book.getBoundingClientRect();
@@ -379,13 +383,13 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
   const { slotW, slotH } = useMemo(() => {
     let w = 0;
     let h = 0;
-    sizes.forEach((s, i) => {
+    p.viewSizes.forEach((s, i) => {
       const r = rotOf(i + 1) % 180 !== 0;
       w = Math.max(w, (r ? s.h : s.w) * scale);
       h = Math.max(h, (r ? s.w : s.h) * scale);
     });
     return { slotW: Math.round(w), slotH: Math.round(h) };
-  }, [sizes, scale, rotOf]);
+  }, [p.viewSizes, scale, rotOf]);
 
   // At fit size the stage doesn't scroll, so a one-finger drag can turn pages instead of panning.
   const [atFit, setAtFit] = useState(true);
@@ -465,6 +469,8 @@ export const SpreadView = forwardRef<SpreadHandle, Props>(function SpreadView(p,
                     flashId={p.flashId}
                     search={p.search}
                     bookmarked={p.bookmarks.includes(pg)}
+                    ink={p.inkByPage[pg]}
+                    crop={p.cropOf(pg)}
                     onLink={role === 'L' || role === 'R' ? p.onLink : undefined}
                   />
                 </div>

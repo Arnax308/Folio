@@ -54,6 +54,10 @@ On the Android app (and touch-only devices) Folio switches to a touch-first layo
 - Rotate the whole document (`R` / `Shift R`) or single pages from their thumbnail
 - Two-page book view (`D`) with a WebGL paper-curl page turn (the page bends around a moving cylinder, lit by its curvature, casting shadows on the pages beneath; falls back to a 3D flip without WebGL). Turn with `←` / `→`, Space, the scroll wheel, the side arrows, or **grab a page edge and drag** — let go past halfway to turn, earlier to let it fall back. Zoom and pan work here too. The animation and "cover on its own" can be switched off in the **Aa** menu
 - Bookmarks (`B`): a ribbon on the page, a list in the sidebar and the palette
+- **Pen** (`P`, or the pen in the toolbar): write and draw on pages with a pen or a see-through highlighter (4 colours each, 3 thicknesses), erase whole strokes (`E`, or the stylus's eraser end / side button), undo and redo (`Ctrl Z` / `Ctrl Y`). On a tablet, once you've used a stylus your finger moves the page and your palm is ignored; with fingers only, one finger draws and two fingers move the page. Drawings show in the two-page view and its page turns, follow Night mode, and are written into **Export PDF** as standard ink annotations
+- **Trim white margins** (`M`, the **Aa** menu, or ⋯ on a tablet): Folio finds where the text sits on a sample of pages (odd and even pages separately, ignoring scanner edges and gutter shadows) and shows just that, so the words come out bigger. Highlights, drawings and search still line up
+- **Notebook beside the book** (`W`): a Markdown note that stays open next to the PDF (drag its edge to resize). Start a new one or attach a note you already have. Select text and press **Quote**, or drag a passage or a highlight card into it: it arrives as a quote with a link like `[p. 12](<Book.pdf#page=12>)`. Clicking that link (here, or in any note) opens the book at that page, with a chip to go back
+- **Dictionary**: select a word (double-click, or long-press on a tablet) and press **Define**: definitions grouped by noun / verb / adjective, an example for each, and synonyms you can tap through. Works offline (Princeton WordNet, ~147,000 words; plurals and tenses like "ran" or "mice" find their dictionary form). For names and places, **Wikipedia** fetches a short summary when you're online. Works in the Markdown reader too
 - **References.** In PDFs with links (most publisher ebooks, papers), hover or click a note marker / citation for a preview of what it points to, cropped to the spot, with **Go to**. In books whose notes sit at the back under "Notes to pages 13–29" running heads — scans included — Folio finds the notes section in the background and shows a **Notes** button (`F`) on every page that has notes: it opens the matching notes pages beside your page. Following either leaves a **Back to page N** chip (`Alt ←`)
 - **Reading edition** (the book button in the toolbar): turns a PDF into clean, reflowable text that opens in the Markdown reader, with adjustable type, night mode and highlights. Note numbers become links: hover or tap one to read the note, follow it and come back. The printed page numbers stay in the margin, and a button opens the original PDF at the page you're reading. Two ways to make one:
   - **Precise (Groq, free):** an AI model on [Groq](https://console.groq.com/keys) reads each page image, so the tiny note numbers, italics and headings come out right. Needs a free Groq API key, kept on the device (never in backups); the page images are sent to Groq. On the free plan it reads about 3 pages a minute (a 500-page book takes about 2½ hours). Folio waits out the limits by itself, you can keep reading meanwhile, and if you close Folio it carries on next time. The index is skipped (it points at page numbers a reflowed book doesn't have)
@@ -77,13 +81,17 @@ On the Android app (and touch-only devices) Folio switches to a touch-first layo
 src/
   App.tsx                 hash routing, title bar, command palette
   components/Library.tsx  home screen
-  components/pdf/         PdfReader, PageView, SpreadView (two-page + curl), Sidebar, Annotations
+  components/pdf/         PdfReader, PageView, SpreadView (two-page + curl), Sidebar, Annotations,
+                          InkBar (pen), Notebook (note beside the book)
   components/md/          MdReader, MdEditor, MarkdownView
-  components/ui/          shared UI, command palette, title bar
+  components/ui/          shared UI, command palette, title bar, dictionary card
+  lib/ink.ts, trim.ts     pen strokes; margin detection
+  lib/dictionary.ts       offline WordNet lookups (+ Wikipedia summaries)
   lib/convert/            reading editions: Groq page reading, offline text rebuild, notes linking
   lib/                    storage (db), backup, pdf helpers + export, page curl (WebGL),
                           markdown + mermaid + math, CodeMirror setup, desktop bridge, settings
   styles/                 design tokens + per-view CSS
 src-tauri/                desktop shell (Rust): file opening, single instance, save dialogs
 scripts/release.mjs       version bump + build
+scripts/build-dictionary.mjs  builds public/dict from WordNet (runs before dev / build)
 ```

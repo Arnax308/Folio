@@ -16,6 +16,7 @@ export interface DocMeta {
   sourcePath?: string; // desktop: the file on disk this document came from
   editionId?: string; // PDF: its converted reading edition (a Markdown document)
   sourcePdf?: string; // reading edition: the PDF it was made from
+  notebookId?: string; // PDF: the Markdown note written beside it
 }
 
 export interface NRect { x: number; y: number; w: number; h: number } // normalised 0..1, unrotated page space
@@ -56,6 +57,27 @@ export interface PdfState {
   zoom?: number | 'fit-width' | 'fit-page';
   /** Where the notes are (found once, in the background). null = looked, there's no notes section. */
   notesIndex?: import('./references').NotesIndex | null;
+  /** Pen and highlighter drawings. */
+  ink?: InkStroke[];
+  /** Where the text sits on odd and even pages (found once, when margin trimming is first used). null = nothing to trim. */
+  trim?: TrimBoxes | null;
+}
+
+export type InkTool = 'pen' | 'marker';
+/** One stroke of the pen. Points are normalised 0..1 in unrotated page space; width is a fraction of the page width. */
+export interface InkStroke {
+  id: string;
+  page: number;
+  tool: InkTool;
+  color: string;
+  width: number;
+  pts: number[]; // x0, y0, x1, y1, …
+  createdAt: number;
+}
+
+export interface TrimBoxes {
+  odd: NRect | null;
+  even: NRect | null;
 }
 
 export const HIGHLIGHT_COLORS: { id: HighlightColor; label: string }[] = [

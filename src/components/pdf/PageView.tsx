@@ -2,7 +2,8 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { getPage, pdfjs, rotationTransform, type PDFDoc } from '../../lib/pdf';
 import { PRIORITY, toolsFor } from '../../lib/renderQueue';
 import { getLinks, type PdfLink } from '../../lib/references';
-import type { Highlight } from '../../lib/types';
+import type { Highlight, InkStroke, NRect } from '../../lib/types';
+import { strokePath, VB } from '../../lib/ink';
 
 export interface PageSize { w: number; h: number }
 
@@ -18,6 +19,9 @@ interface Props {
   flashId: string | null;
   search: string;
   bookmarked?: boolean;
+  ink?: InkStroke[];
+  /** Trimmed margins: the part of the page to show (unrotated, 0..1). */
+  crop?: NRect | null;
   /** Links in the PDF (note markers, citations…): hover / click / leave. */
   onLink?: (link: PdfLink, rect: DOMRect, kind: 'enter' | 'leave' | 'click') => void;
 }
@@ -76,7 +80,28 @@ function markSearch(layer: HTMLElement, q: string) {
   }
 }
 
-function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, activeId, flashId, search, bookmarked, onLink }: Props) {
+const NO_INK: InkStroke[] = [];
+
+/** Where the crop box lands in the rotated page, in px (the inverse of unrotate() in pdf.ts). */
+function cropBox(c: NRect, rot: number, w: number, h: number) {
+  const pts = [
+    [c.x * w, c.y * h],
+    [(c.x + c.w) * w, (c.y + c.h) * h],
+  ].map(([x, y]) => (rot === 90 ? [h - y, x] : rot === 180 ? [w - x, h - y] : rot === 270 ? [y, w - x] : [x, y]));
+  const x = Math.min(pts[0][0], pts[1][0]);
+  const y = Math.min(pts[0][1], pts[1][1]);
+  return { x, y, w: Math.abs(pts[1][0] - pts[0][0]), h: Math.abs(pts[1][1] - pts[0][1]) };
+}
+
+function InkLayer({ strokes, tool, ar }: { strokes: InkStroke[]; tool: 'pen' | 'marker'; ar: number }) {
+  return (
+    <svg className={'ink-layer ' + (tool === 'marker' ? 'ink-markers' : 'ink-pens')} viewBox={`0 0 ${VB} ${VB * ar}`} preserveAspectRatio="none">
+      {strokes.map((s) => s.tool === tool && <path key={s.id} d={strokePath(s.pts, ar)} stroke={s.color} strokeWidth={s.width * VB} />)}
+    </svg>
+  );
+}
+
+function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, activeId, flashId, search, bookmarked, ink = NO_INK, crop, onLink }: Props) {
   const [links, setLinks] = useState<PdfLink[]>([]);
   useEffect(() => {
     if (!visible || !onLink) return;
@@ -95,6 +120,10 @@ function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, ac
   const w = size.w * scale;
   const h = size.h * scale;
   const rotated = rotation % 180 !== 0;
+  const OW = rotated ? h : w;
+  const OH = rotated ? w : h;
+  const box = crop ? cropBox(crop, rotation, w, h) : { x: 0, y: 0, w: OW, h: OH };
+  const ar = size.h / size.w;
 
   // Text layer: cheap, scale-independent (it is sized with --scale-factor), so it renders once and
   // first — on a slow scanned page the words show up straight away while the image decodes.
@@ -108,12 +137,13 @@ function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, ac
       const tl = textRef.current;
       if (cancelled || !tl) return;
       tl.replaceChildren();
-      textLayer = new pdfjs.TextLayer({
-        textContentSource: page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
-        container: tl,
-        viewport: page.getViewport({ scale: 1 }),
-      });
       try {
+        // (throws if the document was closed meanwhile, e.g. the reader is going away)
+        textLayer = new pdfjs.TextLayer({
+          textContentSource: page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
+          container: tl,
+          viewport: page.getViewport({ scale: 1 }),
+        });
         await textLayer.render();
       } catch {
         return; // cancelled
@@ -197,10 +227,12 @@ function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, ac
 
   return (
     <div
-      className={'page' + (rendered ? '' : ' pending')}
+      className={'page' + (rendered ? '' : ' pending') + (crop ? ' cropped' : '')}
       data-page={num}
-      style={{ width: rotated ? h : w, height: rotated ? w : h }}
+      data-rot={rotation}
+      style={{ width: box.w, height: box.h }}
     >
+      <div className="page-crop" style={{ left: -box.x, top: -box.y, width: OW, height: OH }}>
       <div
         className="page-surface"
         style={{
@@ -235,7 +267,9 @@ function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, ac
               );
             })}
         </div>
+        <InkLayer strokes={ink} tool="marker" ar={ar} />
         <div className="textLayer" ref={textRef} />
+        <InkLayer strokes={ink} tool="pen" ar={ar} />
         {onLink && links.length > 0 && (
           <div className="link-layer">
             {links.map((l, i) => (
@@ -256,6 +290,7 @@ function PageViewImpl({ doc, num, size, scale, rotation, visible, highlights, ac
             ))}
           </div>
         )}
+      </div>
       </div>
       {!rendered && <div className="page-skeleton" />}
       {bookmarked && <span className="page-ribbon" aria-label="Bookmarked" />}

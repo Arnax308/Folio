@@ -12,3 +12,6 @@ Folio-*-android.apk
 # Local secrets (API keys for development)
 *.local
 .env
+
+# Built from WordNet by scripts/build-dictionary.mjs
+public/dict
